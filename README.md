@@ -1,5 +1,5 @@
 
-## Rust Implementation of the Urkel Tree
+## Go Implementation of the Urkel Tree
 
 In progress implementation of an `urkel` tree from the Handshake project.
 
