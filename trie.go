@@ -16,13 +16,21 @@ type Trie struct {
 	Root    node
 	hashFn  Hasher
 	keySize uint
+	store   *Store
 }
 
 func New(h Hasher, root node) *Trie {
+	// recover state
+	// create store data
+	// set root from state
+	// openDb
+	store := OpenDb("data")
+
 	return &Trie{
 		Root:    root,
 		hashFn:  h,
 		keySize: h.GetSize() * 8,
+		store:   store,
 	}
 }
 
@@ -86,7 +94,7 @@ loop:
 	}
 
 	var newRoot node
-	newRoot = &leafNode{key: key, value: value, params: storeValues{data: leaf}}
+	newRoot = NewLeafNode(key, value, leaf)
 	total := len(nodes) - 1
 
 	// Build the tree: bottom -> top
@@ -118,8 +126,19 @@ func (t *Trie) get(root node, key []byte) []byte {
 		case *nullNode:
 			return nil
 		case *hashNode:
-			// TODO: return from store resolve
-			return nil
+			fmt.Println("resolve hashnode")
+			fmt.Printf("Node pos %v\n", nn.params.getPos())
+
+			isLeaf := false
+			if nn.params.getLeaf() == 1 {
+				isLeaf = true
+			}
+			n, err := t.store.Resolve(nn.params.index, nn.params.getPos(), isLeaf)
+			if err != nil {
+				fmt.Printf("Trie Resolve %v", err)
+				return nil
+			}
+			root = n
 		case *internalNode:
 			if depth == t.keySize {
 				panic("Missing a node!")
@@ -133,14 +152,87 @@ func (t *Trie) get(root node, key []byte) []byte {
 			break
 		case *leafNode:
 			if bytes.Compare(key, nn.key) != 0 {
+				// Prefix collision
 				return nil
 			}
-			// TODO: Return from store.retrieve and
-			return nn.value
+
+			if nn.value != nil {
+				return nn.value
+			}
+
+			fmt.Printf("retreive @ %v\n", nn.vPos)
+			return t.store.Retrieve(nn.vIndex, nn.vSize, nn.vPos)
 		default:
 			return nil
 		}
 	}
+}
+
+func (t *Trie) Commit() {
+	// Write nodes out to storage
+	// Commit the result to meta
+
+	result := t.writeNode(t.Root)
+	if result == nil {
+		panic("Got nil on commit")
+	}
+
+	t.store.Commit(result)
+
+	t.Root = result
+}
+
+func (t *Trie) writeNode(root node) node {
+	switch nn := root.(type) {
+	case *nullNode:
+		return nn
+	case *internalNode:
+		// Walk down the tree
+		nn.left = t.writeNode(nn.left)
+		nn.right = t.writeNode(nn.right)
+
+		if nn.params.index == 0 {
+			// 0 means we haven't saved it yet, so do that...
+			encoded := nn.Encode(t.hashFn)
+			i, pos, err := t.store.WriteNode(encoded)
+			if err != nil {
+				panic(err)
+			}
+			nn.params.setPos(pos)
+			nn.params.index = i
+		}
+
+		return nn.toHashNode(t.hashFn)
+	case *leafNode:
+		if nn.params.index == 0 {
+			// Write the value
+			i, vpos, err := t.store.WriteValue(nn.value)
+			if err != nil {
+				panic(err)
+			}
+			nn.vPos = vpos
+			nn.vSize = uint16(len(nn.value))
+			nn.vIndex = i
+
+			// Now write the leaf
+			encoded := nn.Encode()
+			i, pos, err := t.store.WriteNode(encoded)
+			if err != nil {
+				panic(err)
+			}
+			nn.params.index = i
+			nn.params.setPos(pos)
+		}
+		return nn.toHashNode(t.hashFn)
+	case *hashNode:
+		return nn
+	}
+	return nil
+}
+
+// TEMP
+func (t *Trie) Close() {
+	t.store.Close()
 }
 
 func (t *Trie) Prove(key []byte) *Proof {
@@ -189,6 +281,5 @@ loop:
 			break loop
 		}
 	}
-
 	return proof
 }

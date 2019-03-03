@@ -1,0 +1,30 @@
+
+** Clean up and document logic!
+
+- Clean up node
+-- GetParams() is flaky.  I need a better way to access
+-- node result needs: node.isLeaf() -> bool
+
+- Constants and vars all 1 file "constants.go"
+
+- Missing some 'Resolves' in trie
+
+- Store needs the hashFn
+
+- Trie needs a cleaner api for use:
+
+- Trie needs remove
+
+t := UrkelTree(dir)
+t.Open()
+
+// Write
+tx := t.Transaction()
+tx.Set(...)
+tx.Remove()
+tx.Commit()
+
+// Read
+snap := t.Snapshot()
+snap.Get(...)
+snap.Proof(...)
