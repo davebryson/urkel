@@ -124,7 +124,7 @@ func (p *Proof) Verify(root, key []byte, hasher Hasher, bits int) *ProofResult {
 		if bytes.Compare(p.Key, key) == 0 {
 			return NewProofResult(SAME_KEY, nil)
 		}
-		leaf = hasher.Hash(leafPrefix, p.Key, p.Hash)
+		leaf = hasher.Hash(leafNodeHashPrefix, p.Key, p.Hash)
 		break
 	case EXISTS:
 		leaf = leafHashValue(hasher, key, p.Value)
@@ -137,9 +137,9 @@ func (p *Proof) Verify(root, key []byte, hasher Hasher, bits int) *ProofResult {
 		n := p.NodeHashes[i]
 
 		if HasBit(key, uint(i)) {
-			next = hasher.Hash(internalPrefix, n, next)
+			next = hasher.Hash(internalNodeHashPrefix, n, next)
 		} else {
-			next = hasher.Hash(internalPrefix, next, n)
+			next = hasher.Hash(internalNodeHashPrefix, next, n)
 		}
 	}
 

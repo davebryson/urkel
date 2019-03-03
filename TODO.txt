@@ -1,11 +1,10 @@
 
-** Clean up and document logic!
 
-- Clean up node
--- GetParams() is flaky.  I need a better way to access
--- node result needs: node.isLeaf() -> bool
 
-- Constants and vars all 1 file "constants.go"
+- Create a store interface
+- Implement filestore, memstore
+- move meta to it's own file
+
 
 - Missing some 'Resolves' in trie
 
@@ -15,7 +14,7 @@
 
 - Trie needs remove
 
-t := UrkelTree(dir)
+t := UrkelTree(dir, hashFn)
 t.Open()
 
 // Write

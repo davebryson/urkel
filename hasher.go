@@ -28,3 +28,9 @@ func (h *Sha256) Hash(data ...[]byte) []byte {
 func (h *Sha256) ZeroHash() []byte {
 	return []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 }
+
+// Used as the node.data in a LeafNode
+func leafHashValue(hasher Hasher, k, v []byte) []byte {
+	valueHash := hasher.Hash(v)
+	return hasher.Hash(leafNodeHashPrefix, k, valueHash)
+}

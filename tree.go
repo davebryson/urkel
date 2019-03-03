@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+// HasBit is used throughout the Tree and Proof to decide whether
+// to go left or right based on the key when walking the tree
 func HasBit(key []byte, depth uint) bool {
 	oct := depth >> 3
 	bit := depth & 7
@@ -12,37 +14,42 @@ func HasBit(key []byte, depth uint) bool {
 	return result != 0
 }
 
-type Trie struct {
-	Root    node
-	hashFn  Hasher
-	keySize uint
-	store   *Store
+type Tree struct {
+	Root   node
+	hashFn Hasher
+	store  *FileStore
 }
 
-func New(h Hasher, root node) *Trie {
-	// recover state
-	// create store data
-	// set root from state
-	// openDb
-	store := OpenDb("data")
+func UrkelTree(dir string, h Hasher) *Tree {
+	store := &FileStore{}
+	store.Open(dir, h)
 
-	return &Trie{
-		Root:    root,
-		hashFn:  h,
-		keySize: h.GetSize() * 8,
-		store:   store,
+	rootNode, err := store.GetRootNode()
+	if err != nil {
+		// Log and use the nullNode
+		return &Tree{
+			Root:   &nullNode{},
+			hashFn: h,
+			store:  store,
+		}
+
+	}
+	return &Tree{
+		Root:   rootNode,
+		hashFn: h,
+		store:  store,
 	}
 }
 
-func (t *Trie) RootHash() []byte {
+func (t *Tree) RootHash() []byte {
 	return t.Root.hash(t.hashFn)
 }
 
-func (t *Trie) Insert(key, value []byte) {
+func (t *Tree) Insert(key, value []byte) {
 	t.Root = t.insert(t.Root, key, value)
 }
 
-func (t *Trie) insert(root node, key, value []byte) node {
+func (t *Tree) insert(root node, key, value []byte) node {
 	leaf := leafHashValue(t.hashFn, key, value)
 	nodes := make([]node, 0)
 	var depth uint
@@ -57,7 +64,7 @@ loop:
 			break
 		case *leafNode:
 			if bytes.Compare(key, nn.key) == 0 {
-				if bytes.Compare(leaf, nn.params.data) == 0 {
+				if bytes.Compare(leaf, nn.data) == 0 {
 					return nn
 				}
 				break loop
@@ -73,7 +80,7 @@ loop:
 			depth++
 			break loop
 		case *internalNode:
-			if depth == t.keySize {
+			if depth == KeySizeInBits {
 				v := fmt.Sprintf("Missing node @ depth: %v", depth)
 				panic(v)
 			}
@@ -94,7 +101,7 @@ loop:
 	}
 
 	var newRoot node
-	newRoot = NewLeafNode(key, value, leaf)
+	newRoot = newLeafNode(key, value, leaf)
 	total := len(nodes) - 1
 
 	// Build the tree: bottom -> top
@@ -114,11 +121,11 @@ loop:
 	return newRoot
 }
 
-func (t *Trie) Get(key []byte) []byte {
+func (t *Tree) Get(key []byte) []byte {
 	return t.get(t.Root, key)
 }
 
-func (t *Trie) get(root node, key []byte) []byte {
+func (t *Tree) get(root node, key []byte) []byte {
 	var depth uint
 
 	for {
@@ -127,20 +134,16 @@ func (t *Trie) get(root node, key []byte) []byte {
 			return nil
 		case *hashNode:
 			fmt.Println("resolve hashnode")
-			fmt.Printf("Node pos %v\n", nn.params.getPos())
+			fmt.Printf("Node pos %v\n", nn.getPos())
 
-			isLeaf := false
-			if nn.params.getLeaf() == 1 {
-				isLeaf = true
-			}
-			n, err := t.store.Resolve(nn.params.index, nn.params.getPos(), isLeaf)
+			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
 			if err != nil {
-				fmt.Printf("Trie Resolve %v", err)
+				fmt.Printf("Tree Resolve %v", err)
 				return nil
 			}
 			root = n
 		case *internalNode:
-			if depth == t.keySize {
+			if depth == KeySizeInBits {
 				panic("Missing a node!")
 			}
 			if HasBit(key, depth) {
@@ -161,28 +164,25 @@ func (t *Trie) get(root node, key []byte) []byte {
 			}
 
 			fmt.Printf("retreive @ %v\n", nn.vPos)
-			return t.store.Retrieve(nn.vIndex, nn.vSize, nn.vPos)
+			return t.store.GetValue(nn.vIndex, nn.vSize, nn.vPos)
 		default:
 			return nil
 		}
 	}
 }
 
-func (t *Trie) Commit() {
-	// Write nodes out to storage
-	// Commit the result to meta
-
+// Commit nodes to storage
+func (t *Tree) Commit() {
 	result := t.writeNode(t.Root)
 	if result == nil {
-		panic("Got nil on commit")
+		panic("Got nil root on commit")
 	}
 
 	t.store.Commit(result)
-
 	t.Root = result
 }
 
-func (t *Trie) writeNode(root node) node {
+func (t *Tree) writeNode(root node) node {
 	switch nn := root.(type) {
 	case *nullNode:
 		return nn
@@ -191,20 +191,20 @@ func (t *Trie) writeNode(root node) node {
 		nn.left = t.writeNode(nn.left)
 		nn.right = t.writeNode(nn.right)
 
-		if nn.params.index == 0 {
+		if nn.getIndex() == 0 {
 			// 0 means we haven't saved it yet, so do that...
 			encoded := nn.Encode(t.hashFn)
 			i, pos, err := t.store.WriteNode(encoded)
 			if err != nil {
 				panic(err)
 			}
-			nn.params.setPos(pos)
-			nn.params.index = i
+			nn.setPos(pos)
+			nn.setIndex(i)
 		}
 
 		return nn.toHashNode(t.hashFn)
 	case *leafNode:
-		if nn.params.index == 0 {
+		if nn.getIndex() == 0 {
 			// Write the value
 			i, vpos, err := t.store.WriteValue(nn.value)
 			if err != nil {
@@ -220,8 +220,8 @@ func (t *Trie) writeNode(root node) node {
 			if err != nil {
 				panic(err)
 			}
-			nn.params.index = i
-			nn.params.setPos(pos)
+			nn.setIndex(i)
+			nn.setPos(pos)
 		}
 		return nn.toHashNode(t.hashFn)
 	case *hashNode:
@@ -231,11 +231,11 @@ func (t *Trie) writeNode(root node) node {
 }
 
 // TEMP
-func (t *Trie) Close() {
+func (t *Tree) Close() {
 	t.store.Close()
 }
 
-func (t *Trie) Prove(key []byte) *Proof {
+func (t *Tree) Prove(key []byte) *Proof {
 	proof := NewProof()
 	var depth uint
 	root := t.Root
@@ -245,7 +245,7 @@ loop:
 		case *nullNode:
 			break loop
 		case *internalNode:
-			if depth == t.keySize {
+			if depth == KeySizeInBits {
 				panic("Missing a node!")
 			}
 			if HasBit(key, depth) {

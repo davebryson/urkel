@@ -5,110 +5,162 @@ import (
 	"encoding/binary"
 )
 
-var (
-	internalPrefix = []byte{0x01}
-	leafPrefix     = []byte{0x00}
-	leafSize       = 2 + 4 + 2 + 32
-	internalSize   = (2 + 4 + 32) * 2
-)
+// node is the generic interface for all tree nodes.  There are 4 possible concrete nodes:
+// nullNode, hashNode, leafNode, internalNode.  Because the internalNode contains embedded
+// nodes that can be any of the above, the interface has the addition of methods to provide
+// generic access to each.
+type node interface {
+	// return the hash of the node.data
+	hash(Hasher) []byte
 
+	// shapeshift to a hashnode
+	toHashNode(Hasher) *hashNode
+
+	// get/set the pos which which involves some calculations on node.flags
+	getPos() uint32
+	setPos(p uint32)
+
+	// get/set the index which is the file number
+	getIndex() uint16
+	setIndex(i uint16)
+
+	// the node position with some extra bit fiddling to help to distinquish the type of node
+	getFlags() uint32
+
+	// is the node a leafNode
+	isLeaf() bool
+}
+
+// Check implementations
+var _ node = (*nullNode)(nil)
+var _ node = (*hashNode)(nil)
+var _ node = (*leafNode)(nil)
+var _ node = (*internalNode)(nil)
+
+// Storage data used in each node.
+// index: the file number
+// flags: is the storage pos with some extra bit information (see above)
+// The flag/pos work together to help determine the type of node when decoding
 type storeValues struct {
 	index uint16
 	flags uint32
-	data  []byte
 }
 
-// These flags settings are the biggest challenge with
-// the node interface.  If I add these calls to the interace
+// if 'flags' ANDs to 1 - it's a leaf
+func (n *storeValues) isLeaf() bool {
+	if n.flags&1 == 1 {
+		return true
+	}
+	return false
+}
+
+// Update the node based on the raw storage position (see tree.writeNode())
+// we add a 1 to the pos of a leaf node so we can use flags to determine its type
+func (n *storeValues) setPos(pos uint32) {
+	if n.isLeaf() {
+		n.flags = pos*2 + 1
+	} else {
+		n.flags = pos * 2
+	}
+}
+
+// getters/setters that all nodes need access to
+// getPos devided out the flags that are double above
 func (n *storeValues) getPos() uint32    { return n.flags >> 1 }
-func (n *storeValues) setPos(pos uint32) { n.flags = pos*2 + n.getLeaf() }
-func (n *storeValues) getLeaf() uint32   { return n.flags & 1 }
-func (n *storeValues) setLeaf(bit uint32) {
-	n.flags = (n.flags &^ 1) >> 0
-	n.flags += bit
+func (n *storeValues) getIndex() uint16  { return n.index }
+func (n *storeValues) setIndex(i uint16) { n.index = i }
+func (n *storeValues) getFlags() uint32  { return n.flags }
+
+// ********** nullNode ************
+
+// Sentinal node
+type nullNode struct {
+	storeValues
+	data []byte
 }
 
-type node interface {
-	hash(Hasher) []byte
-	toHashNode(Hasher) *hashNode
-	getParams() storeValues
-}
-
-type (
-	nullNode struct {
-		params storeValues
-	}
-	hashNode struct {
-		params storeValues
-	}
-	leafNode struct {
-		params storeValues
-		// Value specific stuff
-		key    []byte
-		value  []byte
-		vIndex uint16
-		vPos   uint32
-		vSize  uint16
-	}
-	internalNode struct {
-		params storeValues
-		left   node
-		right  node
-	}
-)
-
-func NewHashNode(index uint16, flags uint32, data []byte) *hashNode {
-	return &hashNode{
-		params: storeValues{
-			index: index,
-			flags: flags,
-			data:  data,
-		},
-	}
-}
-
-func NewLeafNode(key, value, leafHash []byte) *leafNode {
-	s := storeValues{data: leafHash}
-	s.setLeaf(1)
-	return &leafNode{key: key, value: value, params: s}
-}
-
-func (n *nullNode) getParams() storeValues     { return n.params }
-func (n *hashNode) getParams() storeValues     { return n.params }
-func (n *leafNode) getParams() storeValues     { return n.params }
-func (n *internalNode) getParams() storeValues { return n.params }
-
-// Impl hash for node
 func (n *nullNode) hash(h Hasher) []byte { return h.ZeroHash() }
-func (n *hashNode) hash(h Hasher) []byte { return n.params.data }
-func (n *leafNode) hash(h Hasher) []byte { return n.params.data }
+func (n *nullNode) toHashNode(h Hasher) *hashNode {
+	return newHashNode(0, 0, n.hash(h))
+}
+
+// ********** hashNode **********
+
+// Used to represent nodes from after they've been stored
+type hashNode struct {
+	storeValues
+	data []byte
+}
+
+func newHashNode(index uint16, flags uint32, data []byte) *hashNode {
+	h := &hashNode{}
+	h.index = index
+	h.flags = flags
+	h.data = data
+	return h
+}
+
+func (n *hashNode) hash(h Hasher) []byte          { return n.data }
+func (n *hashNode) toHashNode(h Hasher) *hashNode { return n }
+
+// ********** leafNode **********
+
+// Leaf of the tree. Contains the values
+type leafNode struct {
+	storeValues
+	data []byte
+	// Value specific stuff
+	key    []byte
+	value  []byte
+	vIndex uint16
+	vPos   uint32
+	vSize  uint16
+}
+
+func newLeafNode(key, value, leafHash []byte) *leafNode {
+	l := &leafNode{key: key, value: value}
+	l.flags = 1
+	l.data = leafHash
+	return l
+}
+
+func (n *leafNode) hash(h Hasher) []byte { return n.data }
+func (n *leafNode) toHashNode(h Hasher) *hashNode {
+	return newHashNode(n.index, n.flags, n.data)
+}
+
+// ********** internalNode **********
+
+// Branch.  Contains other nodes
+type internalNode struct {
+	storeValues
+	data  []byte
+	left  node
+	right node
+}
+
 func (n *internalNode) hash(h Hasher) []byte {
-	if n.params.data == nil {
+	if n.data == nil {
 		lh := n.left.hash(h)
 		rh := n.right.hash(h)
-		n.params.data = h.Hash(internalPrefix, lh, rh)
+		n.data = h.Hash(internalNodeHashPrefix, lh, rh)
 	}
-	return n.params.data
+	return n.data
 }
 
-// impl ToHashNode() for node
-func (n *hashNode) toHashNode(h Hasher) *hashNode { return n }
-func (n *nullNode) toHashNode(h Hasher) *hashNode {
-	return NewHashNode(0, 0, n.hash(h))
-}
-func (n *leafNode) toHashNode(h Hasher) *hashNode {
-	return NewHashNode(n.params.index, n.params.flags, n.params.data)
-}
 func (n *internalNode) toHashNode(h Hasher) *hashNode {
 	hashed := n.hash(h)
-	return NewHashNode(n.params.index, n.params.flags, hashed)
+	return newHashNode(n.index, n.flags, hashed)
 }
 
-// Codec for nodes only Leaf and Internal are effected
+// ********** Codec **********
 
+// We only store leaf/internal Nodes.  However an internal node
+// may contain other nodes represented by their hash
+
+// Encode a Leaf
 func (n *leafNode) Encode() []byte {
-	size := 2 + 4 + 2 + 32 // From node.GetSize - 32 assumes a 32 byte key from the hasher
-	b := make([]byte, size)
+	b := make([]byte, leafSize)
 	offset := 0
 	binary.LittleEndian.PutUint16(b[offset:], uint16(n.vIndex*2+1))
 	offset += 2
@@ -122,32 +174,33 @@ func (n *leafNode) Encode() []byte {
 
 	return b
 }
-func (n *internalNode) Encode(h Hasher) []byte {
-	size := (2 + 4 + 32) * 2 // From node.GetSize - 32 assumes a 32 byte key from the hasher
-	b := make([]byte, size)
 
+// Encode an Internal node
+func (n *internalNode) Encode(h Hasher) []byte {
+	b := make([]byte, internalSize)
 	// Encode left
-	leftParams := n.left.getParams()
 	offset := 0
-	binary.LittleEndian.PutUint16(b[offset:], uint16(leftParams.index*2))
+	// Note: double the index
+	binary.LittleEndian.PutUint16(b[offset:], n.left.getIndex()*2)
 	offset += 2
-	binary.LittleEndian.PutUint32(b[offset:], uint32(leftParams.flags))
+	// Note: we use the raw flags (not pos)
+	binary.LittleEndian.PutUint32(b[offset:], n.left.getFlags())
 	offset += 4
 	copy(b[offset:], n.left.hash(h))
-	offset += 32
+	offset += KeySizeInBytes
 
 	// Right
-	rightParams := n.right.getParams()
-	binary.LittleEndian.PutUint16(b[offset:], uint16(rightParams.index))
+	// Note: we don't double this index
+	binary.LittleEndian.PutUint16(b[offset:], n.right.getIndex())
 	offset += 2
-	binary.LittleEndian.PutUint32(b[offset:], uint32(rightParams.flags))
+	binary.LittleEndian.PutUint32(b[offset:], n.right.getFlags())
 	offset += 4
 	copy(b[offset:], n.right.hash(h))
 
 	return b
 }
 
-// Decode a leaf or internal node
+// DecodeNode - either a leaf or internal node
 func DecodeNode(data []byte, isleaf bool) (node, error) {
 	buf := bytes.NewReader(data)
 	if isleaf {
@@ -169,21 +222,19 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 			return nil, err
 		}
 
-		key = make([]byte, 32)
-		_, err = buf.Read(key[0:32])
+		key = make([]byte, KeySizeInBytes)
+		_, err = buf.Read(key[0:KeySizeInBytes])
 		if err != nil {
 			return nil, err
 		}
 
+		// Note: divide out the index, since we double in encode
 		index >>= 1
-		params := storeValues{}
-		params.setLeaf(1)
-		return &leafNode{
-			key:    key,
-			vIndex: index,
-			vPos:   pos,
-			vSize:  size,
-			params: params}, nil
+		leafN := &leafNode{key: key, vIndex: index, vPos: pos, vSize: size}
+		// Set the flags to 1 here, so we tag it as a leaf node in 'flags'
+		leafN.flags = 1
+		return leafN, nil
+
 	}
 
 	// Decode Internal
@@ -194,7 +245,6 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 	var rflags uint32
 	var rkey []byte
 
-	// how to handle errors on Read
 	err := binary.Read(buf, binary.LittleEndian, &lindex)
 	if err != nil {
 		return nil, err
@@ -203,9 +253,9 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 	if err != nil {
 		return nil, err
 	}
-	// TODO: This size should be dependent on the hasher
-	lkey = make([]byte, 32)
-	_, err = buf.Read(lkey[0:32])
+
+	lkey = make([]byte, KeySizeInBytes)
+	_, err = buf.Read(lkey[0:KeySizeInBytes])
 	if err != nil {
 		return nil, err
 	}
@@ -219,26 +269,18 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 		return nil, err
 	}
 
-	rkey = make([]byte, 32)
-	_, err = buf.Read(rkey[0:32])
+	rkey = make([]byte, KeySizeInBytes)
+	_, err = buf.Read(rkey[0:KeySizeInBytes])
 	if err != nil {
 		return nil, err
 	}
 
-	//Left/Right nodes should be hash node
-	lhashnode := &hashNode{
-		params: storeValues{index: lindex, flags: lflags, data: lkey},
-	}
-	rhashnode := &hashNode{
-		params: storeValues{index: rindex, flags: rflags, data: rkey},
-	}
+	// Note: The decode internalnode contains hashnodes
+	lhashnode := newHashNode(lindex, lflags, lkey)
+	rhashnode := newHashNode(rindex, rflags, rkey)
+
 	return &internalNode{
 		left:  lhashnode,
 		right: rhashnode,
 	}, nil
-}
-
-func leafHashValue(hasher Hasher, k, v []byte) []byte {
-	valueHash := hasher.Hash(v)
-	return hasher.Hash(leafPrefix, k, valueHash)
 }

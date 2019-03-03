@@ -8,13 +8,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var hasher = &Sha256{}
+const testDir = "data"
+const testFile = "data/0000000001"
+
+var h256 = &Sha256{}
 
 func makeKey(k string) []byte {
-	return hasher.Hash([]byte(k))
+	return h256.Hash([]byte(k))
 }
-
-var testFile = "data/0000000001"
 
 func TestStore(t *testing.T) {
 	defer func() {
@@ -22,8 +23,9 @@ func TestStore(t *testing.T) {
 	}()
 
 	assert := assert.New(t)
-	h256 := &Sha256{}
-	tree := New(h256, &nullNode{})
+
+	// Create a new Tree and insert many K/Vs
+	tree := UrkelTree(testDir, h256)
 
 	for i := 0; i < 10000; i++ {
 		k := fmt.Sprintf("name-%v", i)
@@ -32,8 +34,10 @@ func TestStore(t *testing.T) {
 		tree.Insert(key, []byte(v))
 	}
 
+	// Commit to store
 	tree.Commit()
 
+	// Check we can read from store
 	key := makeKey("name-56")
 	r1 := tree.Get(key)
 	assert.Equal([]byte("value-56"), r1)
@@ -50,39 +54,38 @@ func TestStore(t *testing.T) {
 	r1 = tree.Get(key)
 	assert.Nil(r1)
 
+	// Check for a consistent root hash
 	root := "6c7db9e553563e02e94cf906049935a2ba364106c89c369257194df2e40b00e7"
 	rootHash := tree.RootHash()
 	troot := fmt.Sprintf("%x", rootHash)
-
-	fmt.Printf("Tree root: %v\n", tree.Root)
-
 	assert.Equal(root, troot)
 
-	// Not test we can read the meta
-	lastPos := tree.Root.getParams().flags >> 1
+	// Now test we can read the meta from store and it matches the
+	// last tree
+	lastPos := tree.Root.getPos()
 	tree.Close()
 
-	st := OpenDb("data")
+	// Reopen the store
+	st := &FileStore{}
+	st.Open(testDir, h256)
 	assert.Equal(st.state.rootPos, lastPos)
-	fmt.Printf("Meta pos: %v", st.state.metaPos)
 
 	nr, err := st.GetRootNode()
 	assert.Nil(err)
 	assert.NotNil(nr)
 
-	fmt.Printf("Node: %v\n", nr)
+	//fmt.Printf("Node: %v\n", nr)
 
-	assert.Equal(rootHash, nr.getParams().data)
-
-	//fmt.Printf("Tree root: %x\n", tree.RootHash())
-
+	// Compare the root hash from the meta store to the original tree's rootHash
+	haNode := nr.(*hashNode)
+	assert.Equal(rootHash, haNode.data)
+	st.Close()
 }
 
 func TestShouldInsertAndGet(t *testing.T) {
 	assert := assert.New(t)
 
-	h256 := &Sha256{}
-	tree := New(h256, &nullNode{})
+	tree := UrkelTree(testDir, h256)
 
 	// Test insert
 	for i := 0; i < 1000; i++ {
@@ -111,8 +114,7 @@ func TestShouldInsertAndGet(t *testing.T) {
 func TestShouldDoProofs(t *testing.T) {
 	assert := assert.New(t)
 
-	h256 := &Sha256{}
-	tree := New(h256, &nullNode{})
+	tree := UrkelTree("data", h256)
 	tree.Insert(makeKey("name-1"), []byte("value-1"))
 	tree.Insert(makeKey("name-2"), []byte("value-2"))
 
