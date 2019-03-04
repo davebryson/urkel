@@ -1,10 +1,9 @@
 
-- Missing some GetNode() in trie
-- Tree needs remove
+- Add iterator
 - More thorough tests
 
 - Store: 
--- Improve file management robustness
+-- Improve dealing with files: file pool for readonly - 1 writer file
 -- Lock to process
 -- Deal with missing meta in a file
 -- getHistory()

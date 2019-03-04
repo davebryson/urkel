@@ -17,23 +17,27 @@ func makeKey(k string) []byte {
 	return h256.Hash([]byte(k))
 }
 
-func TestStore(t *testing.T) {
-	defer func() {
-		os.RemoveAll(testFile)
-	}()
+func removeTestFile() {
+	os.RemoveAll(testFile)
+}
 
-	assert := assert.New(t)
-
-	// Create a new Tree and insert many K/Vs
-	tree := UrkelTree(testDir, h256)
-
-	for i := 0; i < 10000; i++ {
+func fillTree(tree *Tree, num int) {
+	for i := 0; i < num; i++ {
 		k := fmt.Sprintf("name-%v", i)
 		key := makeKey(k)
 		v := fmt.Sprintf("value-%v", i)
 		tree.Insert(key, []byte(v))
 	}
+}
 
+func TestStoreBasics(t *testing.T) {
+	defer removeTestFile()
+	assert := assert.New(t)
+
+	// Create a new Tree and insert many K/Vs
+	tree := UrkelTree(testDir, h256)
+
+	fillTree(tree, 10000)
 	// Commit to store
 	tree.Commit()
 
@@ -74,32 +78,54 @@ func TestStore(t *testing.T) {
 	assert.Nil(err)
 	assert.NotNil(nr)
 
-	//fmt.Printf("Node: %v\n", nr)
-
 	// Compare the root hash from the meta store to the original tree's rootHash
 	haNode := nr.(*hashNode)
 	assert.Equal(rootHash, haNode.data)
 	st.Close()
 }
 
-func TestShouldDoProofs(t *testing.T) {
+func TestStoreRemove(t *testing.T) {
+	defer removeTestFile()
 	assert := assert.New(t)
 
-	// TODO: Move this once the Proof can read from storage
+	tree := UrkelTree(testDir, h256)
+	fillTree(tree, 10)
+	tree.Commit()
+
+	key := makeKey("name-3")
+	r1 := tree.Get(key)
+	assert.Equal([]byte("value-3"), r1)
+
+	tree.Remove(key)
+	tree.Commit()
+
+	r1 = tree.Get(key)
+	assert.Nil(r1)
+}
+
+func TestStoreDoProofs(t *testing.T) {
+	defer removeTestFile()
+	assert := assert.New(t)
 
 	tree := UrkelTree(testDir, h256)
-	tree.Insert(makeKey("name-1"), []byte("value-1"))
-	tree.Insert(makeKey("name-2"), []byte("value-2"))
+	fillTree(tree, 10)
+	tree.Commit()
+
+	keyToProve := makeKey("name-4")
+	expectedValue := []byte("value-4")
 
 	// Prove the key is there...
-	prf1 := tree.Prove(makeKey("name-2"))
+	prf1 := tree.Prove(keyToProve)
+	assert.NotNil(prf1)
 	assert.Equal(EXISTS, prf1.Type)
-	assert.Equal([]byte("value-2"), prf1.Value)
+	assert.Equal(expectedValue, prf1.Value)
 	assert.Nil(prf1.Hash)
 	assert.True(prf1.Depth() > 0)
 
 	// Verify against the root
-	r2 := prf1.Verify(tree.RootHash(), makeKey("name-2"), h256, 256)
+	r2 := prf1.Verify(tree.RootHash(), keyToProve, h256, 256)
 	assert.Equal(OK, r2.Code)
-	assert.Equal([]byte("value-2"), r2.Value)
+	assert.Equal(expectedValue, r2.Value)
+
+	// Add test to prove non-exist
 }

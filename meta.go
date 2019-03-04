@@ -7,6 +7,9 @@ import (
 	"os"
 )
 
+// meta is stored at the end of commit and contains information about the last
+// root and the file it lives in.  On startup the current log file is read
+// in reverse to search for the meta to bootstrap the tree.
 type meta struct {
 	metaIndex  uint16
 	metaPos    uint32
@@ -15,14 +18,16 @@ type meta struct {
 	rootIsLeaf bool
 }
 
-func DecodeMeta(data []byte) (*meta, error) {
+// DecodeMeta takes the bytes and thaws to the meta
+func DecodeMeta(data []byte, hashFn Hasher) (*meta, error) {
 
 	if len(data) != MetaSize {
 		return nil, fmt.Errorf("Expecting meta data size of 36")
 	}
 
-	hasher := Sha256{}
-	expectedCheckSum := hasher.Hash(data[:16])[:20]
+	// TODO: This needs to refactored - passing the hashFn from the store
+	// it also needs a 'key' from a separate 'meta' file
+	expectedCheckSum := hashFn.Hash(data[:16])[:20]
 
 	buf := bytes.NewReader(data)
 	var mmagic uint32
@@ -104,7 +109,7 @@ func (m *meta) Encode(hashFn Hasher) []byte {
 	return b
 }
 
-func recoverState(currentFile *os.File, fileSize int64) (*meta, error) {
+func recoverState(currentFile *os.File, fileSize int64, hashFn Hasher) (*meta, error) {
 	if currentFile == nil {
 		return nil, fmt.Errorf("Current file is not open")
 	}
@@ -136,7 +141,7 @@ func recoverState(currentFile *os.File, fileSize int64) (*meta, error) {
 		}
 
 		// Found a meta header - try to decode
-		m, err := DecodeMeta(metaBuffer)
+		m, err := DecodeMeta(metaBuffer, hashFn)
 		if err != nil {
 			return nil, err
 		}

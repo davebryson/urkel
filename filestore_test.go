@@ -43,7 +43,7 @@ func TestMetaFile(t *testing.T) {
 
 	encoded := m.Encode(hashFn)
 	assert.NotNil(encoded)
-	b, err := DecodeMeta(encoded)
+	b, err := DecodeMeta(encoded, hashFn)
 	assert.Nil(err)
 	assert.NotNil(b)
 	assert.True(b.rootIsLeaf)

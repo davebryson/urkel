@@ -62,7 +62,7 @@ func (db *FileStore) Open(dir string, hashfn Hasher) error {
 	db.pos = uint32(fileSize)
 
 	// Try to recover the latest state from the meta
-	metaState, err := recoverState(f, fileSize)
+	metaState, err := recoverState(f, fileSize, hashfn)
 	if err != nil {
 		// no state found - maybe the first file
 		db.state = &meta{

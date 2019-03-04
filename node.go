@@ -7,8 +7,8 @@ import (
 
 // node is the generic interface for all tree nodes.  There are 4 possible concrete nodes:
 // nullNode, hashNode, leafNode, internalNode.  Because the internalNode contains embedded
-// nodes that can be any of the above, the interface has the addition of methods to provide
-// generic access to each.
+// nodes that can be any of the above, the interface has the additional methods to provide
+// generic access to each throughout the tree
 type node interface {
 	// return the hash of the node.data
 	hash(Hasher) []byte
@@ -16,7 +16,7 @@ type node interface {
 	// shapeshift to a hashnode
 	toHashNode(Hasher) *hashNode
 
-	// get/set the pos which which involves some calculations on node.flags
+	// get/set the pos which involves some calculations on node.flags
 	getPos() uint32
 	setPos(p uint32)
 
@@ -65,7 +65,7 @@ func (n *storeValues) setPos(pos uint32) {
 }
 
 // getters/setters that all nodes need access to
-// getPos devided out the flags that are double above
+// getPos divides out the flags that are doubled above
 func (n *storeValues) getPos() uint32    { return n.flags >> 1 }
 func (n *storeValues) getIndex() uint16  { return n.index }
 func (n *storeValues) setIndex(i uint16) { n.index = i }
@@ -86,7 +86,7 @@ func (n *nullNode) toHashNode(h Hasher) *hashNode {
 
 // ********** hashNode **********
 
-// Used to represent nodes from after they've been stored
+// Used to represent nodes after they've been stored
 type hashNode struct {
 	storeValues
 	data []byte
@@ -131,7 +131,7 @@ func (n *leafNode) toHashNode(h Hasher) *hashNode {
 
 // ********** internalNode **********
 
-// Branch.  Contains other nodes
+// Branch.  Contains other nodes via left/right
 type internalNode struct {
 	storeValues
 	data  []byte
@@ -155,7 +155,7 @@ func (n *internalNode) toHashNode(h Hasher) *hashNode {
 
 // ********** Codec **********
 
-// We only store leaf/internal Nodes.  However an internal node
+// We only store leaf/internal nodes.  However an internal node
 // may contain other nodes represented by their hash
 
 // Encode a Leaf
@@ -228,10 +228,10 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 			return nil, err
 		}
 
-		// Note: divide out the index, since we double in encode
+		// Note: divide out the index, since we doubled in encode
 		index >>= 1
 		leafN := &leafNode{key: key, vIndex: index, vPos: pos, vSize: size}
-		// Set the flags to 1 here, so we tag it as a leaf node in 'flags'
+		// Set 'flags' to 1 here, so we tag it as a leaf node
 		leafN.flags = 1
 		return leafN, nil
 
@@ -275,7 +275,7 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 		return nil, err
 	}
 
-	// Note: The decode internalnode contains hashnodes
+	// Note: The decoded internalNode contains hashnodes
 	lhashnode := newHashNode(lindex, lflags, lkey)
 	rhashnode := newHashNode(rindex, rflags, rkey)
 

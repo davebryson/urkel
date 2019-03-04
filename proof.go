@@ -132,7 +132,6 @@ func (p *Proof) Verify(root, key []byte, hasher Hasher, bits int) *ProofResult {
 	}
 
 	next := leaf
-
 	for i := p.Depth() - 1; i >= 0; i-- {
 		n := p.NodeHashes[i]
 

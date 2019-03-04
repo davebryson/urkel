@@ -53,6 +53,7 @@ func (t *Tree) Insert(key, value []byte) {
 	t.Root = t.insert(t.Root, key, value)
 }
 
+// DONE: Store
 func (t *Tree) insert(root node, key, value []byte) node {
 	leaf := leafHashValue(t.hashFn, key, value)
 	nodes := make([]node, 0)
@@ -132,6 +133,7 @@ func (t *Tree) Get(key []byte) []byte {
 	return t.get(t.Root, key)
 }
 
+// DONE: store
 func (t *Tree) get(root node, key []byte) []byte {
 	var depth uint
 
@@ -170,6 +172,93 @@ func (t *Tree) get(root node, key []byte) []byte {
 			return nil
 		}
 	}
+}
+
+// Remove
+
+// Done store
+func (t *Tree) Remove(key []byte) {
+	t.Root, _ = t.remove(t.Root, key)
+}
+
+func (t *Tree) remove(root node, key []byte) (node, error) {
+	nodes := make([]node, 0)
+	var depth uint
+loop:
+	for {
+		switch nn := root.(type) {
+		case *nullNode:
+			return root, nil
+		case *internalNode:
+			if depth == KeySizeInBits {
+				v := fmt.Sprintf("Missing node @ depth: %v", depth)
+				panic(v)
+			}
+
+			if HasBit(key, depth) {
+				nodes = append(nodes, nn.left)
+				root = nn.right
+			} else {
+				nodes = append(nodes, nn.right)
+				root = nn.left
+			}
+
+			depth++
+			break
+		case *hashNode:
+			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
+			if err != nil {
+				return nil, err
+			}
+			root = n
+			break
+		case *leafNode:
+			if bytes.Compare(key, nn.key) != 0 {
+				return root, nil
+			}
+
+			if depth == 0 {
+				return &nullNode{}, nil
+			}
+
+			root = nodes[depth-1]
+			if root.isLeaf() {
+				// Pop<clap>off<clap> the last node
+				nodes = nodes[:depth-1]
+				depth--
+
+				for depth > 0 {
+					sideNode := nodes[depth-1]
+					if _, isNullNode := sideNode.(*nullNode); !isNullNode {
+						break
+					}
+				}
+				nodes = nodes[:depth-1]
+				depth--
+			} else {
+				root = &nullNode{}
+			}
+			break loop
+		default:
+			return nil, fmt.Errorf("remove: Unknown node type")
+		}
+	} // end for
+
+	total := len(nodes) - 1
+	for i := total; i >= 0; i-- {
+		n := nodes[i]
+		depth--
+
+		if HasBit(key, depth) {
+			// <- node root ->
+			root = &internalNode{left: n, right: root}
+		} else {
+			// <- root node ->
+			root = &internalNode{left: root, right: n}
+		}
+	}
+
+	return root, nil
 }
 
 // Commit nodes to storage
@@ -240,6 +329,7 @@ func (t *Tree) Close() {
 	t.store.Close()
 }
 
+// Done: store
 func (t *Tree) Prove(key []byte) *Proof {
 	proof := NewProof()
 	var depth uint
@@ -265,22 +355,27 @@ loop:
 			depth++
 			break
 		case *leafNode:
-			// TODO: retrieve value from store
+			value := t.store.GetValue(nn.vIndex, nn.vSize, nn.vPos)
 
-			// Found a leaf down the alleged path
-			// it's either a match or a collision - doesn't match
-			// what we're expecting.
+			// Found a leaf down the alleged path:
+			// it's either a match or a collision (doesn't match) what we're expecting.
 			if bytes.Compare(key, nn.key) == 0 {
 				proof.Type = EXISTS
-				proof.Value = nn.value
+				proof.Value = value
 			} else {
 				proof.Type = COLLISION
 				proof.Key = nn.key
-				proof.Hash = t.hashFn.Hash(nn.value)
+				proof.Hash = t.hashFn.Hash(value)
 			}
+
 			break loop
 		case *hashNode:
-			// TODO: return  resolve from store
+			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
+			if err != nil {
+				// What's the best way to handle this?
+				return nil
+			}
+			root = n
 			break
 		default:
 			break loop
