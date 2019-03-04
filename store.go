@@ -3,7 +3,7 @@ package urkel
 // Store - methods that should be implemented by any store
 type Store interface {
 	// OpenStore
-	Open(dir string, hashFn Hasher)
+	Open(dir string, hashFn Hasher) error
 
 	// Close the underlying file,etc..
 	Close()
@@ -24,5 +24,5 @@ type Store interface {
 	WriteValue(val []byte) (uint16, uint32, error)
 
 	// Commit the root node. Writes out nodes and meta
-	Commit(root node)
+	Commit(root node) error
 }

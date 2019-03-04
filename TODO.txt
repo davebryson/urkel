@@ -1,18 +1,17 @@
 
+- Missing some GetNode() in trie
+- Tree needs remove
+- More thorough tests
 
+- Store: 
+-- Improve file management robustness
+-- Lock to process
+-- Deal with missing meta in a file
+-- getHistory()
+-- file rollover when > MaxFileSize
+-- Compact
 
-- Create a store interface
-- Implement filestore, memstore
-- move meta to it's own file
-
-
-- Missing some 'Resolves' in trie
-
-- Store needs the hashFn
-
-- Trie needs a cleaner api for use:
-
-- Trie needs remove
+API: 
 
 t := UrkelTree(dir, hashFn)
 t.Open()

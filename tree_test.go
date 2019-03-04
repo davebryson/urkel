@@ -82,39 +82,12 @@ func TestStore(t *testing.T) {
 	st.Close()
 }
 
-func TestShouldInsertAndGet(t *testing.T) {
-	assert := assert.New(t)
-
-	tree := UrkelTree(testDir, h256)
-
-	// Test insert
-	for i := 0; i < 1000; i++ {
-		k := fmt.Sprintf("name-%v", i)
-		key := makeKey(k)
-		v := fmt.Sprintf("value-%v", i)
-		tree.Insert(key, []byte(v))
-	}
-
-	//tree.Commit()
-
-	// Test they're in the tree
-	for i := 0; i < 10; i++ {
-		k := fmt.Sprintf("name-%v", i)
-		key := makeKey(k)
-		expectedValue := fmt.Sprintf("value-%v", i)
-		r1 := tree.Get(key)
-		assert.NotNil(r1)
-		assert.Equal([]byte(expectedValue), r1)
-	}
-
-	rh := fmt.Sprintf("%x", tree.RootHash())
-	assert.Equal("c30615331618881a39b04b51e5625243ec87a2b69fdefe319feedc0b0f96a7a0", rh)
-}
-
 func TestShouldDoProofs(t *testing.T) {
 	assert := assert.New(t)
 
-	tree := UrkelTree("data", h256)
+	// TODO: Move this once the Proof can read from storage
+
+	tree := UrkelTree(testDir, h256)
 	tree.Insert(makeKey("name-1"), []byte("value-1"))
 	tree.Insert(makeKey("name-2"), []byte("value-2"))
 

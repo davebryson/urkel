@@ -16,63 +16,72 @@ import (
 var _ Store = (*FileStore)(nil)
 
 type FileStore struct {
-	buf         bytes.Buffer
-	pos         uint32
-	index       uint16
-	dir         string
-	currentFile *os.File
-	state       *meta
-	hashFn      Hasher
+	buf    bytes.Buffer
+	pos    uint32
+	index  uint16
+	dir    string
+	file   *os.File
+	state  *meta
+	hashFn Hasher
 }
 
-func (st *FileStore) Open(dir string, hashfn Hasher) {
-	// Scan the latest file in dir
-	// read the meta for index, etc...
-	// bootup
-	// IF no files, set index to 1
+func (db *FileStore) Open(dir string, hashfn Hasher) error {
 
-	currenFileindex := uint16(1)
+	dirExists, err := exists(dir)
+	if !dirExists {
+		err := os.Mkdir(dir, 0700)
+		if err != nil {
+			return err
+		}
+	}
+
+	db.hashFn = hashfn
+	db.dir = dir
+
+	// Get the current file index
+	currenFileindex := uint16(1) // Default
 	files, err := loadFiles(dir)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if len(files) > 0 {
-		// If we have valid files the len of the file list
+		// If we have valid files - the 'len' of the file list
 		// is the current file to use.
 		currenFileindex = uint16(len(files))
 	}
 
+	db.index = currenFileindex
+
 	// Get the file
-	f, fileSize, err := getOrCreateFile(dir, currenFileindex)
+	f, fileSize, err := db.getFileHandle()
 	if err != nil {
-		panic(err)
+		return err
 	}
+
+	db.file = f
+	db.pos = uint32(fileSize)
 
 	// Try to recover the latest state from the meta
 	metaState, err := recoverState(f, fileSize)
 	if err != nil {
 		// no state found - maybe the first file
-		st.state = &meta{
+		db.state = &meta{
 			metaIndex: currenFileindex,
 			rootIndex: currenFileindex,
 		}
 	} else {
-		st.state = metaState
+		db.state = metaState
 	}
 
-	st.pos = uint32(fileSize)
-	st.index = currenFileindex
-	st.dir = dir
-	st.currentFile = f
-	st.hashFn = hashfn
+	return nil
 }
 
-func (st *FileStore) GetRootNode() (node, error) {
-	rPos := st.state.rootPos
-	isLeaf := st.state.rootIsLeaf
-	rIndex := st.state.rootIndex
+func (db *FileStore) GetRootNode() (node, error) {
+	rPos := db.state.rootPos
+	isLeaf := db.state.rootIsLeaf
+	rIndex := db.state.rootIndex
 
-	n, err := st.GetNode(rIndex, rPos, isLeaf)
+	n, err := db.GetNode(rIndex, rPos, isLeaf)
 	if err != nil {
 		return nil, err
 	}
@@ -81,85 +90,100 @@ func (st *FileStore) GetRootNode() (node, error) {
 	if isLeaf {
 		nv := n.(*leafNode)
 		key := nv.key
-		value := st.GetValue(nv.vIndex, nv.vSize, nv.vPos)
-		nv.data = leafHashValue(st.hashFn, key, value)
+		value := db.GetValue(nv.vIndex, nv.vSize, nv.vPos)
+		nv.data = leafHashValue(db.hashFn, key, value)
 		return nv, nil
 	}
-	return n.toHashNode(st.hashFn), nil
+	return n.toHashNode(db.hashFn), nil
 }
 
 // Temp for testing...
 
-func (st *FileStore) Close() {
-	st.currentFile.Sync()
-	st.currentFile.Close()
+func (db *FileStore) Close() {
+	if db.file != nil {
+		db.file.Sync()
+		db.file.Close()
+		db.file = nil
+	}
 }
 
-func (st *FileStore) WriteNode(encodedNode []byte) (uint16, uint32, error) {
-	writePos := st.pos
-	n, err := st.buf.Write(encodedNode)
+func (db *FileStore) WriteNode(encodedNode []byte) (uint16, uint32, error) {
+	writePos := db.pos
+	n, err := db.buf.Write(encodedNode)
 	if err != nil {
 		return 0, 0, err
 	}
-	st.pos += uint32(n)
-	return st.index, writePos, nil
+	db.pos += uint32(n)
+	return db.index, writePos, nil
 }
 
-func (st *FileStore) WriteValue(val []byte) (uint16, uint32, error) {
-	vpos := st.pos
-	n, err := st.buf.Write(val)
+func (db *FileStore) WriteValue(val []byte) (uint16, uint32, error) {
+	vpos := db.pos
+	n, err := db.buf.Write(val)
 	if err != nil {
 		return 0, 0, err
 	}
-	st.pos += uint32(n)
-	return st.index, vpos, nil
+	db.pos += uint32(n)
+	return db.index, vpos, nil
 }
 
-func (st *FileStore) writeMeta(root node) error {
+func (db *FileStore) writeMeta(root node) error {
 	rPos := root.getFlags()
 	rIndex := root.getIndex()
 
-	st.state.rootPos = rPos
-	st.state.rootIndex = rIndex
-	st.state.metaIndex = st.index
+	db.state.rootPos = rPos
+	db.state.rootIndex = rIndex
+	db.state.metaIndex = db.index
 
-	padSize := MetaSize - (st.pos % MetaSize)
+	padSize := MetaSize - (db.pos % MetaSize)
 	padding := pad(padSize)
-	_, err := st.buf.Write(padding)
+	_, err := db.buf.Write(padding)
 	if err != nil {
 		return err
 	}
-	st.pos += uint32(padSize)
-	st.state.metaPos = st.pos
+	db.pos += uint32(padSize)
+	db.state.metaPos = db.pos
 
-	encodedMeta := st.state.Encode(st.hashFn)
-	n, err := st.buf.Write(encodedMeta)
+	encodedMeta := db.state.Encode(db.hashFn)
+	n, err := db.buf.Write(encodedMeta)
 	if err != nil {
 		return err
 	}
 
-	st.pos += uint32(n)
+	db.pos += uint32(n)
 	return nil
 }
 
-func (st *FileStore) Commit(root node) {
-	// 1. Write meta to buffer
-	err := st.writeMeta(root)
-	if err != nil {
-		panic(err)
+func (db *FileStore) Commit(root node) error {
+	if db.file == nil {
+		// TODO: This is where we should check file size in the future...
+		f, _, err := db.getFileHandle()
+		if err != nil {
+			return err
+		}
+		db.file = f
 	}
+
+	// 1. Write meta
+	err := db.writeMeta(root)
+	if err != nil {
+		return err
+	}
+
 	// 2. dump to file
-	st.buf.WriteTo(st.currentFile)
-	st.currentFile.Sync()
-	st.buf.Reset()
+	db.buf.WriteTo(db.file)
+	db.file.Sync()
+	db.buf.Reset()
+
+	return nil
 }
 
 // Retrieve a value from the file for a give leafNode
-func (st *FileStore) GetValue(index uint16, size uint16, pos uint32) []byte {
+func (db *FileStore) GetValue(index uint16, size uint16, pos uint32) []byte {
 	// params should be the value location and size
 	// read from the file and return the value
 	bits := make([]byte, size)
-	_, err := st.currentFile.ReadAt(bits, int64(pos))
+	_, err := db.file.ReadAt(bits, int64(pos))
 	if err != nil {
 		fmt.Printf("Error reading value %s", err)
 		return nil
@@ -168,24 +192,24 @@ func (st *FileStore) GetValue(index uint16, size uint16, pos uint32) []byte {
 }
 
 // Resolve a given hashnode and shapeshift to leaf/internal
-func (st *FileStore) GetNode(index uint16, pos uint32, isLeaf bool) (node, error) {
+func (db *FileStore) GetNode(index uint16, pos uint32, isLeaf bool) (node, error) {
 	bitSize := internalSize
 	if isLeaf {
 		bitSize = leafSize
 	}
 	bits := make([]byte, bitSize)
-	_, err := st.currentFile.ReadAt(bits, int64(pos))
+	_, err := db.file.ReadAt(bits, int64(pos))
 	if err != nil {
-		fmt.Printf("Error reading value %s", err)
+		//fmt.Printf("Error reading value %s\n", err)
 		return nil, err
 	}
-	fmt.Printf("Got %v bits\n", len(bits))
-	fmt.Printf("%x\n", bits)
+	//fmt.Printf("Got %v bits\n", len(bits))
+	//fmt.Printf("%x\n", bits)
 	return DecodeNode(bits, isLeaf)
 }
 
-// Temp function
-func getOrCreateFile(dir string, index uint16) (*os.File, int64, error) {
+// Temp function REMOVE
+/*func getOrCreateFile(dir string, index uint16) (*os.File, int64, error) {
 	n := fmt.Sprintf("%010d", index)
 	fn := filepath.Join(dir, n)
 
@@ -201,22 +225,29 @@ func getOrCreateFile(dir string, index uint16) (*os.File, int64, error) {
 	fileSize := info.Size()
 
 	return f, fileSize, nil
-}
+}*/
 
 // ----- TODO Below for real app ------ //
-func (st *FileStore) createFilename(index uint16) string {
+func (db *FileStore) createFilename(index uint16) string {
 	n := fmt.Sprintf("%010d", index)
-	return filepath.Join(st.dir, n)
+	return filepath.Join(db.dir, n)
 }
 
 // File management
-func (st *FileStore) getFileHandle(index uint16) *os.File {
-	fn := st.createFilename(index)
+func (db *FileStore) getFileHandle() (*os.File, int64, error) {
+	fn := db.createFilename(db.index)
 	f, err := os.OpenFile(fn, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		panic(err)
+		return nil, 0, err
 	}
-	return f
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	fileSize := info.Size()
+
+	return f, fileSize, nil
 }
 
 func validateFilename(fn string) int64 {
@@ -258,4 +289,15 @@ func pad(size uint32) []byte {
 		d[i] = 0
 	}
 	return d
+}
+
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return true, err
 }

@@ -22,7 +22,10 @@ type Tree struct {
 
 func UrkelTree(dir string, h Hasher) *Tree {
 	store := &FileStore{}
-	store.Open(dir, h)
+	err := store.Open(dir, h)
+	if err != nil {
+		panic(err)
+	}
 
 	rootNode, err := store.GetRootNode()
 	if err != nil {
@@ -34,6 +37,7 @@ func UrkelTree(dir string, h Hasher) *Tree {
 		}
 
 	}
+
 	return &Tree{
 		Root:   rootNode,
 		hashFn: h,
@@ -60,8 +64,11 @@ loop:
 		case *nullNode:
 			break loop
 		case *hashNode:
-			// TODO: reolve from store.  Hash is only the compact rep of Leaf/Internal
-			break
+			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
+			if err != nil {
+				return nil
+			}
+			root = n
 		case *leafNode:
 			if bytes.Compare(key, nn.key) == 0 {
 				if bytes.Compare(leaf, nn.data) == 0 {
@@ -133,12 +140,8 @@ func (t *Tree) get(root node, key []byte) []byte {
 		case *nullNode:
 			return nil
 		case *hashNode:
-			fmt.Println("resolve hashnode")
-			fmt.Printf("Node pos %v\n", nn.getPos())
-
 			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
 			if err != nil {
-				fmt.Printf("Tree Resolve %v", err)
 				return nil
 			}
 			root = n
@@ -162,8 +165,6 @@ func (t *Tree) get(root node, key []byte) []byte {
 			if nn.value != nil {
 				return nn.value
 			}
-
-			fmt.Printf("retreive @ %v\n", nn.vPos)
 			return t.store.GetValue(nn.vIndex, nn.vSize, nn.vPos)
 		default:
 			return nil
@@ -178,7 +179,11 @@ func (t *Tree) Commit() {
 		panic("Got nil root on commit")
 	}
 
-	t.store.Commit(result)
+	err := t.store.Commit(result)
+	if err != nil {
+		panic(err)
+	}
+
 	t.Root = result
 }
 
