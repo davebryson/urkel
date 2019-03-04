@@ -4,10 +4,11 @@
 In progress implementation of an `urkel` tree from the Handshake project.
 
 ### What Works:
-- In memory tree (insert, get)
-- Proof/Verify
+- insert, get, proof, verify
+- initial urkel 'db'
+
+see `tree_test.go`
 
 ### To Do:
 - Tree.remove()
-- Store, Encoding/Decoding
-- Snapshot
+- Transction/Snapshot
