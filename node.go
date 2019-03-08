@@ -16,19 +16,13 @@ type node interface {
 	// shapeshift to a hashnode
 	toHashNode(Hasher) *hashNode
 
-	// get/set the pos which involves some calculations on node.flags
-	getPos() uint32
-	setPos(p uint32)
-
-	// get/set the index which is the file number
-	getIndex() uint16
-	setIndex(i uint16)
-
-	// the node position with some extra bit fiddling to help to distinquish the type of node
-	getFlags() uint32
-
 	// is the node a leafNode
 	isLeaf() bool
+
+	// Helpers when we don't know what specific type of node we
+	// are working with
+	getIndex() uint16
+	getPos() uint32
 }
 
 // Check implementations
@@ -37,78 +31,55 @@ var _ node = (*hashNode)(nil)
 var _ node = (*leafNode)(nil)
 var _ node = (*internalNode)(nil)
 
-// Storage data used in each node.
-// index: the file number
-// flags: is the storage pos with some extra bit information (see above)
-// The flag/pos work together to help determine the type of node when decoding
-type storeValues struct {
-	index uint16
-	flags uint32
-}
-
-// if 'flags' ANDs to 1 - it's a leaf
-func (n *storeValues) isLeaf() bool {
-	if n.flags&1 == 1 {
-		return true
-	}
-	return false
-}
-
-// Update the node based on the raw storage position (see tree.writeNode())
-// we add a 1 to the pos of a leaf node so we can use flags to determine its type
-func (n *storeValues) setPos(pos uint32) {
-	if n.isLeaf() {
-		n.flags = pos*2 + 1
-	} else {
-		n.flags = pos * 2
-	}
-}
-
-// getters/setters that all nodes need access to
-// getPos divides out the flags that are doubled above
-func (n *storeValues) getPos() uint32    { return n.flags >> 1 }
-func (n *storeValues) getIndex() uint16  { return n.index }
-func (n *storeValues) setIndex(i uint16) { n.index = i }
-func (n *storeValues) getFlags() uint32  { return n.flags }
-
 // ********** nullNode ************
 
 // Sentinal node
 type nullNode struct {
-	storeValues
-	data []byte
+	index uint16
+	pos   uint32
+	data  []byte
 }
 
 func (n *nullNode) hash(h Hasher) []byte { return h.ZeroHash() }
+func (n *nullNode) isLeaf() bool         { return false }
 func (n *nullNode) toHashNode(h Hasher) *hashNode {
-	return newHashNode(0, 0, n.hash(h))
+	return newHashNode(0, 0, n.hash(h), 0)
 }
+func (n *nullNode) getIndex() uint16 { return n.index }
+func (n *nullNode) getPos() uint32   { return n.pos }
 
 // ********** hashNode **********
 
 // Used to represent nodes after they've been stored
 type hashNode struct {
-	storeValues
-	data []byte
+	index uint16
+	pos   uint32
+	data  []byte
+	leaf  uint8
 }
 
-func newHashNode(index uint16, flags uint32, data []byte) *hashNode {
-	h := &hashNode{}
-	h.index = index
-	h.flags = flags
-	h.data = data
-	return h
+func newHashNode(index uint16, pos uint32, data []byte, leaf uint8) *hashNode {
+	return &hashNode{
+		index: index,
+		pos:   pos,
+		data:  data,
+		leaf:  leaf,
+	}
 }
 
 func (n *hashNode) hash(h Hasher) []byte          { return n.data }
+func (n *hashNode) isLeaf() bool                  { return n.leaf == 1 }
 func (n *hashNode) toHashNode(h Hasher) *hashNode { return n }
+func (n *hashNode) getIndex() uint16              { return n.index }
+func (n *hashNode) getPos() uint32                { return n.pos }
 
 // ********** leafNode **********
 
 // Leaf of the tree. Contains the values
 type leafNode struct {
-	storeValues
-	data []byte
+	index uint16
+	pos   uint32
+	data  []byte
 	// Value specific stuff
 	key    []byte
 	value  []byte
@@ -119,25 +90,30 @@ type leafNode struct {
 
 func newLeafNode(key, value, leafHash []byte) *leafNode {
 	l := &leafNode{key: key, value: value}
-	l.flags = 1
 	l.data = leafHash
 	return l
 }
 
 func (n *leafNode) hash(h Hasher) []byte { return n.data }
+func (n *leafNode) isLeaf() bool         { return true }
 func (n *leafNode) toHashNode(h Hasher) *hashNode {
-	return newHashNode(n.index, n.flags, n.data)
+	return newHashNode(n.index, n.pos, n.data, 1)
 }
+func (n *leafNode) getIndex() uint16 { return n.index }
+func (n *leafNode) getPos() uint32   { return n.pos }
 
 // ********** internalNode **********
 
 // Branch.  Contains other nodes via left/right
 type internalNode struct {
-	storeValues
+	index uint16
+	pos   uint32
 	data  []byte
 	left  node
 	right node
 }
+
+func (n *internalNode) isLeaf() bool { return false }
 
 func (n *internalNode) hash(h Hasher) []byte {
 	if n.data == nil {
@@ -150,13 +126,33 @@ func (n *internalNode) hash(h Hasher) []byte {
 
 func (n *internalNode) toHashNode(h Hasher) *hashNode {
 	hashed := n.hash(h)
-	return newHashNode(n.index, n.flags, hashed)
+	return newHashNode(n.index, n.pos, hashed, 0)
 }
+
+func (n *internalNode) getIndex() uint16 { return n.index }
+func (n *internalNode) getPos() uint32   { return n.pos }
 
 // ********** Codec **********
 
 // We only store leaf/internal nodes.  However an internal node
 // may contain other nodes represented by their hash
+
+// Used in the encoder to 'tag' position so we can determine
+// if the decoded bits are a leaf or internal node
+func TagPosition(pos uint32, isLeaf bool) uint32 {
+	if isLeaf {
+		return pos*2 + 1
+	}
+	return pos * 2
+}
+
+// Used in the decode to get the true position and whether the bits are a
+// leaf or internal node
+func GetTagForPosition(taggedPos uint32) (uint8, uint32) {
+	isLeaf := uint8(taggedPos & 1)
+	pos := taggedPos >> 1
+	return isLeaf, pos
+}
 
 // Encode a Leaf
 func (n *leafNode) Encode() []byte {
@@ -178,13 +174,16 @@ func (n *leafNode) Encode() []byte {
 // Encode an Internal node
 func (n *internalNode) Encode(h Hasher) []byte {
 	b := make([]byte, internalSize)
+
 	// Encode left
 	offset := 0
-	// Note: double the index
+	// Note: double the index.  We'll shift this out in the encoder to test for potential
+	// file corruption.
 	binary.LittleEndian.PutUint16(b[offset:], n.left.getIndex()*2)
 	offset += 2
-	// Note: we use the raw flags (not pos)
-	binary.LittleEndian.PutUint32(b[offset:], n.left.getFlags())
+	// Note: tag the position
+	lpos := TagPosition(n.left.getPos(), n.left.isLeaf())
+	binary.LittleEndian.PutUint32(b[offset:], lpos)
 	offset += 4
 	copy(b[offset:], n.left.hash(h))
 	offset += KeySizeInBytes
@@ -193,7 +192,9 @@ func (n *internalNode) Encode(h Hasher) []byte {
 	// Note: we don't double this index
 	binary.LittleEndian.PutUint16(b[offset:], n.right.getIndex())
 	offset += 2
-	binary.LittleEndian.PutUint32(b[offset:], n.right.getFlags())
+	// Note: tag the position
+	rpos := TagPosition(n.right.getPos(), n.right.isLeaf())
+	binary.LittleEndian.PutUint32(b[offset:], rpos)
 	offset += 4
 	copy(b[offset:], n.right.hash(h))
 
@@ -213,6 +214,13 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		// Should == 1 as we added 1 in encode
+		if index&1 != 1 {
+			panic("Decoding leaf: Potentially corrupt database")
+		}
+		index >>= 1
+
 		err = binary.Read(buf, binary.LittleEndian, &pos)
 		if err != nil {
 			return nil, err
@@ -223,64 +231,69 @@ func DecodeNode(data []byte, isleaf bool) (node, error) {
 		}
 
 		key = make([]byte, KeySizeInBytes)
-		_, err = buf.Read(key[0:KeySizeInBytes])
+		_, err = buf.Read(key)
 		if err != nil {
 			return nil, err
 		}
 
-		// Note: divide out the index, since we doubled in encode
-		index >>= 1
 		leafN := &leafNode{key: key, vIndex: index, vPos: pos, vSize: size}
-		// Set 'flags' to 1 here, so we tag it as a leaf node
-		leafN.flags = 1
 		return leafN, nil
-
 	}
 
 	// Decode Internal
 	var lindex uint16
-	var lflags uint32
+	var lpos uint32
 	var lkey []byte
 	var rindex uint16
-	var rflags uint32
+	var rpos uint32
 	var rkey []byte
 
+	// Left node
 	err := binary.Read(buf, binary.LittleEndian, &lindex)
 	if err != nil {
 		return nil, err
 	}
-	err = binary.Read(buf, binary.LittleEndian, &lflags)
+	err = binary.Read(buf, binary.LittleEndian, &lpos)
 	if err != nil {
 		return nil, err
 	}
+
+	// Should == 0 as it's a doubled number
+	if lindex&1 != 0 {
+		panic("Decoding internal: Potentially corrupt database")
+	}
+	lindex >>= 1
+
+	// Get the real position back and whether it's a leaf or not
+	leftIsLeaf, leftPos := GetTagForPosition(lpos)
 
 	lkey = make([]byte, KeySizeInBytes)
-	_, err = buf.Read(lkey[0:KeySizeInBytes])
+	_, err = buf.Read(lkey)
 	if err != nil {
 		return nil, err
 	}
 
+	// Right node
 	err = binary.Read(buf, binary.LittleEndian, &rindex)
 	if err != nil {
 		return nil, err
 	}
-	err = binary.Read(buf, binary.LittleEndian, &rflags)
+	err = binary.Read(buf, binary.LittleEndian, &rpos)
 	if err != nil {
 		return nil, err
 	}
+
+	rightIsLeaf, rightPos := GetTagForPosition(rpos)
 
 	rkey = make([]byte, KeySizeInBytes)
-	_, err = buf.Read(rkey[0:KeySizeInBytes])
+	_, err = buf.Read(rkey)
 	if err != nil {
 		return nil, err
 	}
 
-	// Note: The decoded internalNode contains hashnodes
-	lhashnode := newHashNode(lindex, lflags, lkey)
-	rhashnode := newHashNode(rindex, rflags, rkey)
-
-	return &internalNode{
-		left:  lhashnode,
-		right: rhashnode,
-	}, nil
+	result := &internalNode{
+		left:  newHashNode(lindex, leftPos, lkey, leftIsLeaf),
+		right: newHashNode(rindex, rightPos, rkey, rightIsLeaf),
+	}
+	return result, nil
 }

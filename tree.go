@@ -30,6 +30,7 @@ func UrkelTree(dir string, h Hasher) *Tree {
 	rootNode, err := store.GetRootNode()
 	if err != nil {
 		// Log and use the nullNode
+		fmt.Printf("Error on Tree startup: %v - new file?\n", err)
 		return &Tree{
 			Root:   &nullNode{},
 			hashFn: h,
@@ -37,6 +38,8 @@ func UrkelTree(dir string, h Hasher) *Tree {
 		}
 
 	}
+
+	fmt.Printf("Loaded rootnode: %v\n", rootNode)
 
 	return &Tree{
 		Root:   rootNode,
@@ -65,10 +68,12 @@ loop:
 		case *nullNode:
 			break loop
 		case *hashNode:
-			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
+			n, err := t.store.GetNode(nn.index, nn.pos, nn.isLeaf())
 			if err != nil {
+				fmt.Printf("hashNode: error reading hashNode: %v\n", err)
 				return nil
 			}
+
 			root = n
 		case *leafNode:
 			if bytes.Compare(key, nn.key) == 0 {
@@ -92,7 +97,6 @@ loop:
 				v := fmt.Sprintf("Missing node @ depth: %v", depth)
 				panic(v)
 			}
-
 			if HasBit(key, depth) {
 				nodes = append(nodes, nn.left)
 				root = nn.right
@@ -142,10 +146,10 @@ func (t *Tree) get(root node, key []byte) []byte {
 		case *nullNode:
 			return nil
 		case *hashNode:
-			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
-			if err != nil {
-				return nil
-			}
+			n, _ := t.store.GetNode(nn.index, nn.pos, nn.isLeaf())
+			//if err != nil {
+			//	return nil
+			//}
 			root = n
 		case *internalNode:
 			if depth == KeySizeInBits {
@@ -164,9 +168,10 @@ func (t *Tree) get(root node, key []byte) []byte {
 				return nil
 			}
 
-			if nn.value != nil {
-				return nn.value
-			}
+			//if nn.value != nil {
+			//	return nn.value
+			//}
+
 			return t.store.GetValue(nn.vIndex, nn.vSize, nn.vPos)
 		default:
 			return nil
@@ -206,7 +211,7 @@ loop:
 			depth++
 			break
 		case *hashNode:
-			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
+			n, err := t.store.GetNode(nn.index, nn.pos, nn.isLeaf())
 			if err != nil {
 				return nil, err
 			}
@@ -263,17 +268,16 @@ loop:
 
 // Commit nodes to storage
 func (t *Tree) Commit() {
-	result := t.writeNode(t.Root)
-	if result == nil {
+	newRoot := t.writeNode(t.Root)
+	if newRoot == nil {
 		panic("Got nil root on commit")
 	}
+	t.Root = newRoot
 
-	err := t.store.Commit(result)
+	err := t.store.Commit(newRoot.getIndex(), newRoot.getPos(), newRoot.isLeaf())
 	if err != nil {
 		panic(err)
 	}
-
-	t.Root = result
 }
 
 func (t *Tree) writeNode(root node) node {
@@ -285,20 +289,20 @@ func (t *Tree) writeNode(root node) node {
 		nn.left = t.writeNode(nn.left)
 		nn.right = t.writeNode(nn.right)
 
-		if nn.getIndex() == 0 {
+		if nn.index == 0 {
 			// 0 means we haven't saved it yet, so do that...
 			encoded := nn.Encode(t.hashFn)
 			i, pos, err := t.store.WriteNode(encoded)
 			if err != nil {
 				panic(err)
 			}
-			nn.setPos(pos)
-			nn.setIndex(i)
+			nn.index = i
+			nn.pos = pos
 		}
 
 		return nn.toHashNode(t.hashFn)
 	case *leafNode:
-		if nn.getIndex() == 0 {
+		if nn.index == 0 {
 			// Write the value
 			i, vpos, err := t.store.WriteValue(nn.value)
 			if err != nil {
@@ -314,13 +318,14 @@ func (t *Tree) writeNode(root node) node {
 			if err != nil {
 				panic(err)
 			}
-			nn.setIndex(i)
-			nn.setPos(pos)
+			nn.index = i
+			nn.pos = pos
 		}
 		return nn.toHashNode(t.hashFn)
 	case *hashNode:
 		return nn
 	}
+
 	return nil
 }
 
@@ -370,7 +375,7 @@ loop:
 
 			break loop
 		case *hashNode:
-			n, err := t.store.GetNode(nn.getIndex(), nn.getPos(), nn.isLeaf())
+			n, err := t.store.GetNode(nn.getIndex(), uint32(nn.getPos()), nn.isLeaf())
 			if err != nil {
 				// What's the best way to handle this?
 				return nil

@@ -1,4 +1,7 @@
 
+*** Serious issue with loading hashNodes.... see TestStoreRecovery:
+Need to better understand how hashNode fit into the big picture
+
 - Add iterator
 - More thorough tests
 

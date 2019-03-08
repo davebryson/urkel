@@ -10,8 +10,7 @@ import (
 	"strconv"
 )
 
-// TODO:  Need to maintain a 'pool' of files and they should
-// be kept open while running...
+// TODO:  Need to maintain a small 'pool' of files for reading and 1 file for writing
 
 var _ Store = (*FileStore)(nil)
 
@@ -26,11 +25,9 @@ type FileStore struct {
 }
 
 func (db *FileStore) Open(dir string, hashfn Hasher) error {
-
 	dirExists, err := exists(dir)
 	if !dirExists {
-		err := os.Mkdir(dir, 0700)
-		if err != nil {
+		if err := os.Mkdir(dir, 0700); err != nil {
 			return err
 		}
 	}
@@ -59,7 +56,7 @@ func (db *FileStore) Open(dir string, hashfn Hasher) error {
 	}
 
 	db.file = f
-	db.pos = uint32(fileSize)
+	db.pos = uint32(fileSize) // This might be a problem
 
 	// Try to recover the latest state from the meta
 	metaState, err := recoverState(f, fileSize, hashfn)
@@ -73,6 +70,9 @@ func (db *FileStore) Open(dir string, hashfn Hasher) error {
 		db.state = metaState
 	}
 
+	fmt.Printf("Meta: %v\n", db.state)
+	fmt.Printf("DB Pos %v\n", db.pos)
+
 	return nil
 }
 
@@ -80,6 +80,12 @@ func (db *FileStore) GetRootNode() (node, error) {
 	rPos := db.state.rootPos
 	isLeaf := db.state.rootIsLeaf
 	rIndex := db.state.rootIndex
+
+	fmt.Println("GetRootNode")
+	fmt.Printf("rPos: %v\n", rPos)
+	fmt.Printf("isLeaf: %v\n", isLeaf)
+	fmt.Printf("rIndex: %v\n", rIndex)
+	fmt.Println("-------")
 
 	n, err := db.GetNode(rIndex, rPos, isLeaf)
 	if err != nil {
@@ -94,22 +100,29 @@ func (db *FileStore) GetRootNode() (node, error) {
 		nv.data = leafHashValue(db.hashFn, key, value)
 		return nv, nil
 	}
+	fmt.Printf("GetRootNode is %v\n", n)
+
 	return n.toHashNode(db.hashFn), nil
 }
 
 // Temp for testing...
 
-func (db *FileStore) Close() {
+func (db *FileStore) Close() error {
 	if db.file != nil {
 		db.file.Sync()
 		db.file.Close()
 		db.file = nil
+		db.buf.Reset()
 	}
+	// Do I care about returning the error here??
+	return nil
 }
 
+// WriteNode to the buffer
 func (db *FileStore) WriteNode(encodedNode []byte) (uint16, uint32, error) {
 	writePos := db.pos
 	n, err := db.buf.Write(encodedNode)
+	// Remove this err is always == nil! See docs
 	if err != nil {
 		return 0, 0, err
 	}
@@ -117,6 +130,7 @@ func (db *FileStore) WriteNode(encodedNode []byte) (uint16, uint32, error) {
 	return db.index, writePos, nil
 }
 
+// WriteValue to the buffer
 func (db *FileStore) WriteValue(val []byte) (uint16, uint32, error) {
 	vpos := db.pos
 	n, err := db.buf.Write(val)
@@ -127,13 +141,12 @@ func (db *FileStore) WriteValue(val []byte) (uint16, uint32, error) {
 	return db.index, vpos, nil
 }
 
-func (db *FileStore) writeMeta(root node) error {
-	rPos := root.getFlags()
-	rIndex := root.getIndex()
-
-	db.state.rootPos = rPos
-	db.state.rootIndex = rIndex
+// writeMeta to the buffer
+func (db *FileStore) writeMeta(i uint16, p uint32, isleaf bool) error {
+	db.state.rootPos = p
+	db.state.rootIndex = i
 	db.state.metaIndex = db.index
+	db.state.rootIsLeaf = isleaf
 
 	padSize := MetaSize - (db.pos % MetaSize)
 	padding := pad(padSize)
@@ -143,6 +156,7 @@ func (db *FileStore) writeMeta(root node) error {
 	}
 	db.pos += uint32(padSize)
 	db.state.metaPos = db.pos
+	fmt.Printf("Wrote Meta at: %v\n", db.pos)
 
 	encodedMeta := db.state.Encode(db.hashFn)
 	n, err := db.buf.Write(encodedMeta)
@@ -154,8 +168,10 @@ func (db *FileStore) writeMeta(root node) error {
 	return nil
 }
 
-func (db *FileStore) Commit(root node) error {
+// Commit - write to file
+func (db *FileStore) Commit(i uint16, p uint32, isleaf bool) error {
 	if db.file == nil {
+		fmt.Println("Db is closed")
 		// TODO: This is where we should check file size in the future...
 		f, _, err := db.getFileHandle()
 		if err != nil {
@@ -164,8 +180,10 @@ func (db *FileStore) Commit(root node) error {
 		db.file = f
 	}
 
+	// Add lock
+
 	// 1. Write meta
-	err := db.writeMeta(root)
+	err := db.writeMeta(i, p, isleaf)
 	if err != nil {
 		return err
 	}
@@ -178,7 +196,7 @@ func (db *FileStore) Commit(root node) error {
 	return nil
 }
 
-// Retrieve a value from the file for a give leafNode
+// GetValue - file read from the store
 func (db *FileStore) GetValue(index uint16, size uint16, pos uint32) []byte {
 	// params should be the value location and size
 	// read from the file and return the value
@@ -191,7 +209,7 @@ func (db *FileStore) GetValue(index uint16, size uint16, pos uint32) []byte {
 	return bits
 }
 
-// Resolve a given hashnode and shapeshift to leaf/internal
+// GetNode - file read from the store
 func (db *FileStore) GetNode(index uint16, pos uint32, isLeaf bool) (node, error) {
 	bitSize := internalSize
 	if isLeaf {
@@ -200,32 +218,17 @@ func (db *FileStore) GetNode(index uint16, pos uint32, isLeaf bool) (node, error
 	bits := make([]byte, bitSize)
 	_, err := db.file.ReadAt(bits, int64(pos))
 	if err != nil {
-		//fmt.Printf("Error reading value %s\n", err)
 		return nil, err
 	}
-	//fmt.Printf("Got %v bits\n", len(bits))
-	//fmt.Printf("%x\n", bits)
-	return DecodeNode(bits, isLeaf)
+
+	n, err := DecodeNode(bits, isLeaf)
+	if err != nil {
+		return nil, err
+	}
+	//n.setIndex(index)
+	//n.setPos(pos)
+	return n, nil
 }
-
-// Temp function REMOVE
-/*func getOrCreateFile(dir string, index uint16) (*os.File, int64, error) {
-	n := fmt.Sprintf("%010d", index)
-	fn := filepath.Join(dir, n)
-
-	f, err := os.OpenFile(fn, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	info, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	fileSize := info.Size()
-
-	return f, fileSize, nil
-}*/
 
 // ----- TODO Below for real app ------ //
 func (db *FileStore) createFilename(index uint16) string {

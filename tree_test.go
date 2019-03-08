@@ -37,51 +37,13 @@ func TestStoreBasics(t *testing.T) {
 	// Create a new Tree and insert many K/Vs
 	tree := UrkelTree(testDir, h256)
 
-	fillTree(tree, 10000)
+	fillTree(tree, 5)
 	// Commit to store
 	tree.Commit()
 
-	// Check we can read from store
-	key := makeKey("name-56")
+	key := makeKey("name-3")
 	r1 := tree.Get(key)
-	assert.Equal([]byte("value-56"), r1)
-
-	key = makeKey("name-399")
-	r1 = tree.Get(key)
-	assert.Equal([]byte("value-399"), r1)
-
-	key = makeKey("name-919")
-	r1 = tree.Get(key)
-	assert.Equal([]byte("value-919"), r1)
-
-	key = makeKey("NOPE-399")
-	r1 = tree.Get(key)
-	assert.Nil(r1)
-
-	// Check for a consistent root hash
-	root := "6c7db9e553563e02e94cf906049935a2ba364106c89c369257194df2e40b00e7"
-	rootHash := tree.RootHash()
-	troot := fmt.Sprintf("%x", rootHash)
-	assert.Equal(root, troot)
-
-	// Now test we can read the meta from store and it matches the
-	// last tree
-	lastPos := tree.Root.getPos()
-	tree.Close()
-
-	// Reopen the store
-	st := &FileStore{}
-	st.Open(testDir, h256)
-	assert.Equal(st.state.rootPos, lastPos)
-
-	nr, err := st.GetRootNode()
-	assert.Nil(err)
-	assert.NotNil(nr)
-
-	// Compare the root hash from the meta store to the original tree's rootHash
-	haNode := nr.(*hashNode)
-	assert.Equal(rootHash, haNode.data)
-	st.Close()
+	assert.Equal([]byte("value-3"), r1)
 }
 
 func TestStoreRemove(t *testing.T) {
@@ -89,7 +51,7 @@ func TestStoreRemove(t *testing.T) {
 	assert := assert.New(t)
 
 	tree := UrkelTree(testDir, h256)
-	fillTree(tree, 10)
+	fillTree(tree, 5)
 	tree.Commit()
 
 	key := makeKey("name-3")
@@ -97,10 +59,13 @@ func TestStoreRemove(t *testing.T) {
 	assert.Equal([]byte("value-3"), r1)
 
 	tree.Remove(key)
-	tree.Commit()
+	//tree.Commit()
 
-	r1 = tree.Get(key)
+	r1 = tree.Get(makeKey("name-3"))
 	assert.Nil(r1)
+
+	r1 = tree.Get(makeKey("name-2"))
+	assert.Equal([]byte("value-2"), r1)
 }
 
 func TestStoreDoProofs(t *testing.T) {
@@ -128,4 +93,37 @@ func TestStoreDoProofs(t *testing.T) {
 	assert.Equal(expectedValue, r2.Value)
 
 	// Add test to prove non-exist
+}
+
+func TestStoreRecovery(t *testing.T) {
+	defer removeTestFile()
+	assert := assert.New(t)
+
+	tree := UrkelTree(testDir, h256)
+	key1 := makeKey(fmt.Sprintf("name-%v", 1))
+	tree.Insert(key1, []byte(fmt.Sprintf("value-%v", 1)))
+	//tree.Commit()
+	/*tree.Commit()
+
+	r1 := tree.Get(key)
+	assert.Equal([]byte("value-1"), r1)*/
+	//tree.Close()
+
+	//tree := UrkelTree(testDir, h256)
+	key2 := makeKey(fmt.Sprintf("name-%v", 2))
+	tree.Insert(key2, []byte(fmt.Sprintf("value-%v", 2)))
+	tree.Commit()
+
+	//r1 = tree.Get(key)
+	//assert.Equal([]byte("value-2"), r1)
+	//tree.Close()
+
+	//tree = UrkelTree(testDir, h256)
+	key3 := makeKey(fmt.Sprintf("name-%v", 3))
+	tree.Insert(key3, []byte(fmt.Sprintf("value-%v", 3)))
+	tree.Commit()
+
+	r1 := tree.Get(key1)
+	assert.Equal([]byte("value-1"), r1)
+	tree.Close()
 }

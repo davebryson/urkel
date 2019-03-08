@@ -1,12 +1,13 @@
 package urkel
 
+import "io"
+
 // Store - methods that should be implemented by any store
+// should include io.Closer interface
 type Store interface {
+	io.Closer
 	// OpenStore
 	Open(dir string, hashFn Hasher) error
-
-	// Close the underlying file,etc..
-	Close()
 
 	// GetRootNode - either the cached one or pulled from meta
 	GetRootNode() (node, error)
@@ -24,5 +25,5 @@ type Store interface {
 	WriteValue(val []byte) (uint16, uint32, error)
 
 	// Commit the root node. Writes out nodes and meta
-	Commit(root node) error
+	Commit(i uint16, p uint32, isleaf bool) error
 }

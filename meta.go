@@ -71,18 +71,14 @@ func DecodeMeta(data []byte, hashFn Hasher) (*meta, error) {
 		return nil, fmt.Errorf("Checksum don't match")
 	}
 
-	isLeaf := false
-	if rpos&1 == 1 {
-		isLeaf = true
-	}
-	rpos >>= 1
+	isLeaf, tpos := GetTagForPosition(rpos)
 
 	return &meta{
 		metaIndex:  mindex,
 		metaPos:    mpos,
 		rootIndex:  rindex,
-		rootPos:    rpos,
-		rootIsLeaf: isLeaf,
+		rootPos:    tpos,
+		rootIsLeaf: isLeaf == 1,
 	}, nil
 }
 
@@ -98,10 +94,11 @@ func (m *meta) Encode(hashFn Hasher) []byte {
 	offset += 4
 	binary.LittleEndian.PutUint16(b[offset:], m.rootIndex)
 	offset += 2
-	binary.LittleEndian.PutUint32(b[offset:], m.rootPos)
+
+	tpos := TagPosition(m.rootPos, m.rootIsLeaf)
+	binary.LittleEndian.PutUint32(b[offset:], tpos)
 	offset += 4
 
-	//hasher := Sha256{}
 	hashed := hashFn.Hash(b[:16])
 
 	// TODO: This should use the meta random key...
@@ -111,7 +108,11 @@ func (m *meta) Encode(hashFn Hasher) []byte {
 
 func recoverState(currentFile *os.File, fileSize int64, hashFn Hasher) (*meta, error) {
 	if currentFile == nil {
-		return nil, fmt.Errorf("Current file is not open")
+		panic("recover state = file is not open")
+	}
+
+	if fileSize == 0 {
+		return nil, fmt.Errorf("Log is empty")
 	}
 
 	startPos := fileSize - (fileSize % MetaSize)
@@ -143,8 +144,10 @@ func recoverState(currentFile *os.File, fileSize int64, hashFn Hasher) (*meta, e
 		// Found a meta header - try to decode
 		m, err := DecodeMeta(metaBuffer, hashFn)
 		if err != nil {
+			fmt.Printf("Error decoding meta: %v\n", err)
 			return nil, err
 		}
+
 		return m, nil
 	}
 }
