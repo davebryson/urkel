@@ -1,13 +1,12 @@
 package urkel
 
 const (
-	MetaMagic      uint32 = 0x6d726b6c
-	MetaSize              = 36
-	MaxFileSize           = (1 << 30) * 2 // 2gb
-	KeySizeInBytes        = 32
-	KeySizeInBits         = 256
-	leafSize       int    = 2 + 4 + 2 + KeySizeInBytes
-	internalSize   int    = (2 + 4 + KeySizeInBytes) * 2
+	keySizeInBytes     = 32
+	keySizeInBits      = 256
+	leafSize       int = 34
+	internalSize   int = 66
+	// RootKey is the (temp) key used in storage for the root node
+	RootKey string = "98abb2b2f00b87d1320caebec7540d3c2f35a7986d5977ef129a515a04ee7507"
 )
 
 var (

@@ -3,6 +3,7 @@ package urkel
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 )
 
 // node is the generic interface for all tree nodes.  There are 4 possible concrete nodes:
@@ -19,12 +20,7 @@ type node interface {
 	// is the node a leafNode
 	isLeaf() bool
 
-	// Helpers when we don't know what specific type of node we
-	// are working with
-	getIndex() uint16
-	getPos() uint32
-
-	setData(d []byte)
+	setData([]byte)
 }
 
 // Check implementations
@@ -37,59 +33,49 @@ var _ node = (*internalNode)(nil)
 
 // Sentinal node
 type nullNode struct {
-	index uint16
-	pos   uint32
 	data  []byte
+	saved uint8
 }
 
 func (n *nullNode) hash(h Hasher) []byte { return h.ZeroHash() }
 func (n *nullNode) isLeaf() bool         { return false }
 func (n *nullNode) toHashNode(h Hasher) *hashNode {
-	return newHashNode(0, 0, n.hash(h), 0)
+	return newHashNode(n.hash(h), 0, n.saved)
 }
-func (n *nullNode) getIndex() uint16 { return n.index }
-func (n *nullNode) getPos() uint32   { return n.pos }
 func (n *nullNode) setData(d []byte) { n.data = d }
 
 // ********** hashNode **********
 
 // Used to represent nodes after they've been stored
 type hashNode struct {
-	index uint16
-	pos   uint32
 	data  []byte
 	leaf  uint8
+	saved uint8
 }
 
-func newHashNode(index uint16, pos uint32, data []byte, leaf uint8) *hashNode {
+func newHashNode(data []byte, leaf uint8, saved uint8) *hashNode {
 	return &hashNode{
-		index: index,
-		pos:   pos,
 		data:  data,
 		leaf:  leaf,
+		saved: saved,
 	}
 }
 
 func (n *hashNode) hash(h Hasher) []byte          { return n.data }
 func (n *hashNode) isLeaf() bool                  { return n.leaf == 1 }
 func (n *hashNode) toHashNode(h Hasher) *hashNode { return n }
-func (n *hashNode) getIndex() uint16              { return n.index }
-func (n *hashNode) getPos() uint32                { return n.pos }
 func (n *hashNode) setData(d []byte)              { n.data = d }
 
 // ********** leafNode **********
 
 // Leaf of the tree. Contains the values
 type leafNode struct {
-	index uint16
-	pos   uint32
 	data  []byte
+	saved uint8
 	// Value specific stuff
-	key    []byte
-	value  []byte
-	vIndex uint16
-	vPos   uint32
-	vSize  uint16
+	key   []byte
+	value []byte
+	vSize uint16
 }
 
 func newLeafNode(key, value, leafHash []byte) *leafNode {
@@ -101,19 +87,16 @@ func newLeafNode(key, value, leafHash []byte) *leafNode {
 func (n *leafNode) hash(h Hasher) []byte { return n.data }
 func (n *leafNode) isLeaf() bool         { return true }
 func (n *leafNode) toHashNode(h Hasher) *hashNode {
-	return newHashNode(n.index, n.pos, n.data, 1)
+	return newHashNode(n.data, 1, n.saved)
 }
-func (n *leafNode) getIndex() uint16 { return n.index }
-func (n *leafNode) getPos() uint32   { return n.pos }
 func (n *leafNode) setData(d []byte) { n.data = d }
 
 // ********** internalNode **********
 
 // Branch.  Contains other nodes via left/right
 type internalNode struct {
-	index uint16
-	pos   uint32
 	data  []byte
+	saved uint8
 	left  node
 	right node
 }
@@ -131,11 +114,8 @@ func (n *internalNode) hash(h Hasher) []byte {
 
 func (n *internalNode) toHashNode(h Hasher) *hashNode {
 	hashed := n.hash(h)
-	return newHashNode(n.index, n.pos, hashed, 0)
+	return newHashNode(hashed, 0, n.saved)
 }
-
-func (n *internalNode) getIndex() uint16 { return n.index }
-func (n *internalNode) getPos() uint32   { return n.pos }
 func (n *internalNode) setData(d []byte) { n.data = d }
 
 // ********** Codec **********
@@ -145,161 +125,104 @@ func (n *internalNode) setData(d []byte) { n.data = d }
 
 // Used in the encoder to 'tag' position so we can determine
 // if the decoded bits are a leaf or internal node
-func TagPosition(pos uint32, isLeaf bool) uint32 {
+func tagNodeType(isLeaf bool) uint8 {
 	if isLeaf {
-		return pos*2 + 1
+		return 1
 	}
-	return pos * 2
+	return 0
 }
 
-// Used in the decode to get the true position and whether the bits are a
-// leaf or internal node
-func GetTagForPosition(taggedPos uint32) (uint8, uint32) {
-	isLeaf := uint8(taggedPos & 1)
-	pos := taggedPos >> 1
-	return isLeaf, pos
-}
+/*func maybeLeafNodeTag(tag uint8) bool {
+	if tag == 1 {
+		return true
+	}
+	return false
+}*/
 
-// Encode a Leaf
+// Encode a LeafNode  SIZE: 34
 func (n *leafNode) Encode() []byte {
 	b := make([]byte, leafSize)
 	offset := 0
-	binary.LittleEndian.PutUint16(b[offset:], uint16(n.vIndex*2+1))
-	offset += 2
-	binary.LittleEndian.PutUint32(b[offset:], uint32(n.vPos))
-	offset += 4
 	binary.LittleEndian.PutUint16(b[offset:], uint16(n.vSize))
 	offset += 2
-
 	// Copy key to the remainder of the buffer
 	copy(b[offset:], n.key)
-
 	return b
 }
 
-// Encode an Internal node
+// Encode an Internal node SIZE: 66
 func (n *internalNode) Encode(h Hasher) []byte {
 	b := make([]byte, internalSize)
-
-	// Encode left
+	// Here we need to encode the l/r to tag if they're a leaf
+	// 33
 	offset := 0
-	// Note: double the index.  We'll shift this out in the encoder to test for potential
-	// file corruption.
-	binary.LittleEndian.PutUint16(b[offset:], n.left.getIndex()*2)
-	offset += 2
-	// Note: tag the position
-	lpos := TagPosition(n.left.getPos(), n.left.isLeaf())
-	binary.LittleEndian.PutUint32(b[offset:], lpos)
-	offset += 4
+	b[offset] = tagNodeType(n.left.isLeaf())
+	offset++
 	copy(b[offset:], n.left.hash(h))
-	offset += KeySizeInBytes
+	offset += keySizeInBytes
 
-	// Right
-	// Note: we don't double this index
-	binary.LittleEndian.PutUint16(b[offset:], n.right.getIndex())
-	offset += 2
-	// Note: tag the position
-	rpos := TagPosition(n.right.getPos(), n.right.isLeaf())
-	binary.LittleEndian.PutUint32(b[offset:], rpos)
-	offset += 4
+	// Right: 33
+	b[offset] = tagNodeType(n.right.isLeaf())
+	offset++
 	copy(b[offset:], n.right.hash(h))
-
 	return b
 }
 
 // DecodeNode - either a leaf or internal node
-func DecodeNode(data []byte, isleaf bool) (node, error) {
+func DecodeNode(data []byte) (node, error) {
+	numBits := len(data)
+	isLeaf := numBits == leafSize
+	isInternal := numBits == internalSize
+
+	if !isLeaf && !isInternal {
+		return nil, fmt.Errorf("Decode node: wrong size bits %v", numBits)
+	}
 	buf := bytes.NewReader(data)
-	if isleaf {
-		var index uint16
-		var pos uint32
+
+	if isLeaf {
 		var size uint16
 		var key []byte
-
-		err := binary.Read(buf, binary.LittleEndian, &index)
-		if err != nil {
+		if err := binary.Read(buf, binary.LittleEndian, &size); err != nil {
 			return nil, err
 		}
 
-		// Should == 1 as we added 1 in encode
-		if index&1 != 1 {
-			panic("Decoding leaf: Potentially corrupt database")
-		}
-		index >>= 1
-
-		err = binary.Read(buf, binary.LittleEndian, &pos)
-		if err != nil {
+		key = make([]byte, keySizeInBytes)
+		if _, err := buf.Read(key); err != nil {
 			return nil, err
 		}
-		err = binary.Read(buf, binary.LittleEndian, &size)
-		if err != nil {
-			return nil, err
-		}
-
-		key = make([]byte, KeySizeInBytes)
-		_, err = buf.Read(key)
-		if err != nil {
-			return nil, err
-		}
-
-		leafN := &leafNode{key: key, vIndex: index, vPos: pos, vSize: size}
+		leafN := &leafNode{key: key, vSize: size}
 		return leafN, nil
 	}
 
 	// Decode Internal
-	var lindex uint16
-	var lpos uint32
+	var leftFlag uint8
 	var lkey []byte
-	var rindex uint16
-	var rpos uint32
+	var rightFlag uint8
 	var rkey []byte
 
 	// Left node
-	err := binary.Read(buf, binary.LittleEndian, &lindex)
-	if err != nil {
+	// Read the flag
+	if err := binary.Read(buf, binary.LittleEndian, &leftFlag); err != nil {
 		return nil, err
 	}
-	err = binary.Read(buf, binary.LittleEndian, &lpos)
-	if err != nil {
-		return nil, err
-	}
-
-	// Should == 0 as it's a doubled number
-	if lindex&1 != 0 {
-		panic("Decoding internal: Potentially corrupt database")
-	}
-	lindex >>= 1
-
-	// Get the real position back and whether it's a leaf or not
-	leftIsLeaf, leftPos := GetTagForPosition(lpos)
-
-	lkey = make([]byte, KeySizeInBytes)
-	_, err = buf.Read(lkey)
-	if err != nil {
+	lkey = make([]byte, keySizeInBytes)
+	if _, err := buf.Read(lkey); err != nil {
 		return nil, err
 	}
 
 	// Right node
-	err = binary.Read(buf, binary.LittleEndian, &rindex)
-	if err != nil {
+	// Read the flag
+	if err := binary.Read(buf, binary.LittleEndian, &rightFlag); err != nil {
 		return nil, err
 	}
-	err = binary.Read(buf, binary.LittleEndian, &rpos)
-	if err != nil {
-		return nil, err
-	}
-
-	rightIsLeaf, rightPos := GetTagForPosition(rpos)
-
-	rkey = make([]byte, KeySizeInBytes)
-	_, err = buf.Read(rkey)
-	if err != nil {
+	rkey = make([]byte, keySizeInBytes)
+	if _, err := buf.Read(rkey); err != nil {
 		return nil, err
 	}
 
 	result := &internalNode{
-		left:  newHashNode(lindex, leftPos, lkey, leftIsLeaf),
-		right: newHashNode(rindex, rightPos, rkey, rightIsLeaf),
+		left:  newHashNode(lkey, leftFlag, 1),
+		right: newHashNode(rkey, rightFlag, 1),
 	}
 	return result, nil
 }

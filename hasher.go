@@ -21,6 +21,7 @@ func (h *Sha256) Hash(data ...[]byte) []byte {
 	for _, d := range data {
 		hash.Write(d)
 	}
+	// Changed for fixed size
 	return hash.Sum(nil)
 }
 
@@ -30,7 +31,7 @@ func (h *Sha256) ZeroHash() []byte {
 }
 
 // Used as the node.data in a LeafNode
-func leafHashValue(hasher Hasher, k, v []byte) []byte {
+func leafHashValue(hasher Hasher, k []byte, v []byte) []byte {
 	valueHash := hasher.Hash(v)
 	return hasher.Hash(leafNodeHashPrefix, k, valueHash)
 }
