@@ -23,6 +23,8 @@ type node interface {
 	// are working with
 	getIndex() uint16
 	getPos() uint32
+
+	setData(d []byte)
 }
 
 // Check implementations
@@ -47,6 +49,7 @@ func (n *nullNode) toHashNode(h Hasher) *hashNode {
 }
 func (n *nullNode) getIndex() uint16 { return n.index }
 func (n *nullNode) getPos() uint32   { return n.pos }
+func (n *nullNode) setData(d []byte) { n.data = d }
 
 // ********** hashNode **********
 
@@ -72,6 +75,7 @@ func (n *hashNode) isLeaf() bool                  { return n.leaf == 1 }
 func (n *hashNode) toHashNode(h Hasher) *hashNode { return n }
 func (n *hashNode) getIndex() uint16              { return n.index }
 func (n *hashNode) getPos() uint32                { return n.pos }
+func (n *hashNode) setData(d []byte)              { n.data = d }
 
 // ********** leafNode **********
 
@@ -101,6 +105,7 @@ func (n *leafNode) toHashNode(h Hasher) *hashNode {
 }
 func (n *leafNode) getIndex() uint16 { return n.index }
 func (n *leafNode) getPos() uint32   { return n.pos }
+func (n *leafNode) setData(d []byte) { n.data = d }
 
 // ********** internalNode **********
 
@@ -131,6 +136,7 @@ func (n *internalNode) toHashNode(h Hasher) *hashNode {
 
 func (n *internalNode) getIndex() uint16 { return n.index }
 func (n *internalNode) getPos() uint32   { return n.pos }
+func (n *internalNode) setData(d []byte) { n.data = d }
 
 // ********** Codec **********
 

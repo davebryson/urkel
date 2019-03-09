@@ -1,30 +1,4 @@
 
-*** Serious issue with loading hashNodes.... see TestStoreRecovery:
-Need to better understand how hashNode fit into the big picture
-
-- Add iterator
-- More thorough tests
-
-- Store: 
--- Improve dealing with files: file pool for readonly - 1 writer file
--- Lock to process
--- Deal with missing meta in a file
--- getHistory()
--- file rollover when > MaxFileSize
--- Compact
-
-API: 
-
-t := UrkelTree(dir, hashFn)
-t.Open()
-
-// Write
-tx := t.Transaction()
-tx.Set(...)
-tx.Remove()
-tx.Commit()
-
-// Read
-snap := t.Snapshot()
-snap.Get(...)
-snap.Proof(...)
+March 8 notes:
+- Actual store commit code is commented out in Tree.Commit
+- Everything works until you commit to store

@@ -21,12 +21,12 @@ func removeTestFile() {
 	os.RemoveAll(testFile)
 }
 
-func fillTree(tree *Tree, num int) {
+func fillTree(tx MutableTree, num int) {
 	for i := 0; i < num; i++ {
 		k := fmt.Sprintf("name-%v", i)
 		key := makeKey(k)
 		v := fmt.Sprintf("value-%v", i)
-		tree.Insert(key, []byte(v))
+		tx.Set(key, []byte(v))
 	}
 }
 
@@ -36,17 +36,19 @@ func TestStoreBasics(t *testing.T) {
 
 	// Create a new Tree and insert many K/Vs
 	tree := UrkelTree(testDir, h256)
+	tx := tree.Transaction()
 
-	fillTree(tree, 5)
+	fillTree(tx, 5)
 	// Commit to store
-	tree.Commit()
+	tx.Commit()
 
 	key := makeKey("name-3")
-	r1 := tree.Get(key)
+	snapshot := tree.Snapshot()
+	r1 := snapshot.Get(key)
 	assert.Equal([]byte("value-3"), r1)
 }
 
-func TestStoreRemove(t *testing.T) {
+/*func TestStoreRemove(t *testing.T) {
 	defer removeTestFile()
 	assert := assert.New(t)
 
@@ -93,37 +95,46 @@ func TestStoreDoProofs(t *testing.T) {
 	assert.Equal(expectedValue, r2.Value)
 
 	// Add test to prove non-exist
-}
+}*/
 
 func TestStoreRecovery(t *testing.T) {
 	defer removeTestFile()
 	assert := assert.New(t)
 
 	tree := UrkelTree(testDir, h256)
+	tx := tree.Transaction()
+
 	key1 := makeKey(fmt.Sprintf("name-%v", 1))
-	tree.Insert(key1, []byte(fmt.Sprintf("value-%v", 1)))
-	//tree.Commit()
-	/*tree.Commit()
+	tx.Set(key1, []byte(fmt.Sprintf("value-%v", 1)))
+	keya := makeKey(fmt.Sprintf("name-%v", 55))
+	tx.Set(keya, []byte(fmt.Sprintf("value-%v", 55)))
+	tx.Commit()
 
-	r1 := tree.Get(key)
-	assert.Equal([]byte("value-1"), r1)*/
-	//tree.Close()
-
-	//tree := UrkelTree(testDir, h256)
+	tx2 := tree.Transaction()
 	key2 := makeKey(fmt.Sprintf("name-%v", 2))
-	tree.Insert(key2, []byte(fmt.Sprintf("value-%v", 2)))
-	tree.Commit()
+	tx2.Set(key2, []byte(fmt.Sprintf("value-%v", 2)))
+	tx2.Commit()
 
-	//r1 = tree.Get(key)
-	//assert.Equal([]byte("value-2"), r1)
+	snap1 := tree.Snapshot()
+	r1 := snap1.Get(key1)
+	assert.Equal([]byte("value-1"), r1)
 	//tree.Close()
 
-	//tree = UrkelTree(testDir, h256)
+	tx3 := tree.Transaction()
 	key3 := makeKey(fmt.Sprintf("name-%v", 3))
-	tree.Insert(key3, []byte(fmt.Sprintf("value-%v", 3)))
-	tree.Commit()
+	tx3.Set(key3, []byte(fmt.Sprintf("value-%v", 3)))
+	tx3.Commit()
 
-	r1 := tree.Get(key1)
-	assert.Equal([]byte("value-1"), r1)
+	snap2 := tree.Snapshot()
+
+	r := snap2.Get(keya)
+	assert.Equal([]byte("value-55"), r)
+
+	r = snap2.Get(key2)
+	assert.Equal([]byte("value-2"), r)
+
+	r = snap2.Get(key3)
+	assert.Equal([]byte("value-3"), r)
+
 	tree.Close()
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"sync"
 )
 
 // TODO:  Need to maintain a small 'pool' of files for reading and 1 file for writing
@@ -15,6 +16,7 @@ import (
 var _ Store = (*FileStore)(nil)
 
 type FileStore struct {
+	sync.RWMutex
 	buf    bytes.Buffer
 	pos    uint32
 	index  uint16
@@ -63,15 +65,15 @@ func (db *FileStore) Open(dir string, hashfn Hasher) error {
 	if err != nil {
 		// no state found - maybe the first file
 		db.state = &meta{
-			metaIndex: currenFileindex,
-			rootIndex: currenFileindex,
+			metaIndex:  currenFileindex,
+			rootIndex:  currenFileindex,
+			rootIsLeaf: false,
 		}
 	} else {
 		db.state = metaState
 	}
 
 	fmt.Printf("Meta: %v\n", db.state)
-	fmt.Printf("DB Pos %v\n", db.pos)
 
 	return nil
 }
@@ -120,29 +122,31 @@ func (db *FileStore) Close() error {
 
 // WriteNode to the buffer
 func (db *FileStore) WriteNode(encodedNode []byte) (uint16, uint32, error) {
+	//db.Lock()
+	//defer db.Unlock()
+
 	writePos := db.pos
-	n, err := db.buf.Write(encodedNode)
-	// Remove this err is always == nil! See docs
-	if err != nil {
-		return 0, 0, err
-	}
-	db.pos += uint32(n)
+	db.buf.Write(encodedNode)
+	db.pos += uint32(len(encodedNode))
 	return db.index, writePos, nil
 }
 
 // WriteValue to the buffer
 func (db *FileStore) WriteValue(val []byte) (uint16, uint32, error) {
+	//db.Lock()
+	//defer db.Unlock()
+
 	vpos := db.pos
-	n, err := db.buf.Write(val)
-	if err != nil {
-		return 0, 0, err
-	}
-	db.pos += uint32(n)
+	db.buf.Write(val)
+	db.pos += uint32(len(val))
 	return db.index, vpos, nil
 }
 
 // writeMeta to the buffer
-func (db *FileStore) writeMeta(i uint16, p uint32, isleaf bool) error {
+func (db *FileStore) writeMeta(i uint16, p uint32, isleaf bool) {
+	//db.Lock()
+	//defer db.Unlock()
+
 	db.state.rootPos = p
 	db.state.rootIndex = i
 	db.state.metaIndex = db.index
@@ -150,28 +154,21 @@ func (db *FileStore) writeMeta(i uint16, p uint32, isleaf bool) error {
 
 	padSize := MetaSize - (db.pos % MetaSize)
 	padding := pad(padSize)
-	_, err := db.buf.Write(padding)
-	if err != nil {
-		return err
-	}
+	db.buf.Write(padding)
+
 	db.pos += uint32(padSize)
 	db.state.metaPos = db.pos
-	fmt.Printf("Wrote Meta at: %v\n", db.pos)
 
 	encodedMeta := db.state.Encode(db.hashFn)
-	n, err := db.buf.Write(encodedMeta)
-	if err != nil {
-		return err
-	}
+	db.buf.Write(encodedMeta)
 
-	db.pos += uint32(n)
-	return nil
+	db.pos += uint32(MetaSize)
 }
 
 // Commit - write to file
 func (db *FileStore) Commit(i uint16, p uint32, isleaf bool) error {
 	if db.file == nil {
-		fmt.Println("Db is closed")
+		fmt.Println("Store commit - file is closed")
 		// TODO: This is where we should check file size in the future...
 		f, _, err := db.getFileHandle()
 		if err != nil {
@@ -183,14 +180,21 @@ func (db *FileStore) Commit(i uint16, p uint32, isleaf bool) error {
 	// Add lock
 
 	// 1. Write meta
-	err := db.writeMeta(i, p, isleaf)
-	if err != nil {
+	db.writeMeta(i, p, isleaf)
+
+	// 2. dump to file
+	//db.Lock()
+	//defer db.Unlock()
+
+	if _, err := db.buf.WriteTo(db.file); err != nil {
 		return err
 	}
 
-	// 2. dump to file
-	db.buf.WriteTo(db.file)
-	db.file.Sync()
+	//db.pos += uint32(n)
+
+	if err := db.file.Sync(); err != nil {
+		return err
+	}
 	db.buf.Reset()
 
 	return nil
@@ -198,9 +202,12 @@ func (db *FileStore) Commit(i uint16, p uint32, isleaf bool) error {
 
 // GetValue - file read from the store
 func (db *FileStore) GetValue(index uint16, size uint16, pos uint32) []byte {
+	//db.RLock()
+	//defer db.RUnlock()
 	// params should be the value location and size
 	// read from the file and return the value
 	bits := make([]byte, size)
+	fmt.Printf("Try to read value @ %v\n", pos)
 	_, err := db.file.ReadAt(bits, int64(pos))
 	if err != nil {
 		fmt.Printf("Error reading value %s", err)
@@ -209,8 +216,10 @@ func (db *FileStore) GetValue(index uint16, size uint16, pos uint32) []byte {
 	return bits
 }
 
-// GetNode - file read from the store
 func (db *FileStore) GetNode(index uint16, pos uint32, isLeaf bool) (node, error) {
+	//db.RLock()
+	//defer db.RUnlock()
+
 	bitSize := internalSize
 	if isLeaf {
 		bitSize = leafSize
@@ -225,8 +234,6 @@ func (db *FileStore) GetNode(index uint16, pos uint32, isLeaf bool) (node, error
 	if err != nil {
 		return nil, err
 	}
-	//n.setIndex(index)
-	//n.setPos(pos)
 	return n, nil
 }
 
