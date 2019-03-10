@@ -132,13 +132,6 @@ func tagNodeType(isLeaf bool) uint8 {
 	return 0
 }
 
-/*func maybeLeafNodeTag(tag uint8) bool {
-	if tag == 1 {
-		return true
-	}
-	return false
-}*/
-
 // Encode a LeafNode  SIZE: 34
 func (n *leafNode) Encode() []byte {
 	b := make([]byte, leafSize)

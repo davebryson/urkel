@@ -109,8 +109,8 @@ func (p *Proof) IsSane(hasher Hasher, bits int) bool {
 	return true
 }
 
-func (p *Proof) Verify(root, key []byte, hasher Hasher, bits int) *ProofResult {
-
+func (p *Proof) Verify(root, k []byte, hasher Hasher, bits int) *ProofResult {
+	key := hasher.Hash(k)
 	if !p.IsSane(hasher, bits) {
 		return NewProofResult(UNKNOWN_ERROR, nil)
 	}

@@ -29,12 +29,14 @@ type MutableTree struct {
 
 // Set a key/value in the tree
 func (tx *MutableTree) Set(key, value []byte) {
-	tx.Root = tx.Tree.insert(tx.Root, key, value)
+	k := tx.Tree.hashFn.Hash(key)
+	tx.Root = tx.Tree.insert(tx.Root, k, value)
 }
 
 // Remove a value via a key
 func (tx *MutableTree) Remove(key []byte) {
-	tx.Root, _ = tx.Tree.remove(tx.Root, key)
+	k := tx.Tree.hashFn.Hash(key)
+	tx.Root, _ = tx.Tree.remove(tx.Root, k)
 }
 
 // Commit the tree and return the new root hash
@@ -44,7 +46,8 @@ func (tx *MutableTree) Commit() []byte {
 
 // Get a value for a given key
 func (snap *ImmutableTree) Get(key []byte) []byte {
-	return snap.Tree.get(snap.Root, key)
+	k := snap.Tree.hashFn.Hash(key)
+	return snap.Tree.get(snap.Root, k)
 }
 
 // RootHash return the current hash of the root
@@ -54,7 +57,8 @@ func (snap *ImmutableTree) RootHash() []byte {
 
 // Proof returns a proof of the key in the tree
 func (snap *ImmutableTree) Proof(key []byte) *Proof {
-	return snap.Tree.prove(key)
+	k := snap.Tree.hashFn.Hash(key)
+	return snap.Tree.prove(k)
 }
 
 // **** Tree ****
@@ -73,7 +77,7 @@ func NewUrkelTree(store Db, h Hasher) *Tree {
 	rootNode, err := store.GetRoot()
 	if err != nil {
 		nn := &nullNode{}
-		//nn.toHashNode(h)
+		nn.toHashNode(h)
 		return &Tree{
 			Root:   nn,
 			hashFn: h,
@@ -85,6 +89,11 @@ func NewUrkelTree(store Db, h Hasher) *Tree {
 		hashFn: h,
 		store:  store,
 	}
+}
+
+// Close the tree and store when your're done with it
+func (t *Tree) Close() {
+	t.store.Close()
 }
 
 // Transaction returns a MutableTree
@@ -105,6 +114,7 @@ func (t *Tree) Transaction() *MutableTree {
 func (t *Tree) Snapshot() *ImmutableTree {
 	lastRoot, err := t.store.GetRoot()
 	if err != nil {
+		fmt.Printf("Snap err: %v\n", err)
 		panic("Error decoding last root")
 	}
 	s := &ImmutableTree{}

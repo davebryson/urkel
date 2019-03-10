@@ -2,6 +2,7 @@ package urkel
 
 import (
 	"encoding/hex"
+	"fmt"
 	"sync"
 )
 
@@ -60,4 +61,9 @@ func (db *MemoryDb) GetRoot() (node, error) {
 	k := hex.EncodeToString(raw)
 	rootBits := db.cache[k]
 	return DecodeNode(rootBits)
+}
+
+func (db *MemoryDb) Close() {
+	db.cache = nil
+	fmt.Println(" %%%%% CLOSE %%%%%")
 }

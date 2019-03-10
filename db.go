@@ -7,4 +7,5 @@ type Db interface {
 	GetRoot() (node, error)
 	ReadValue(key []byte) []byte
 	Commit(root node, h Hasher) node
+	Close()
 }
