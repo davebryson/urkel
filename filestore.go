@@ -83,7 +83,7 @@ func (db *FileStore) GetRootNode() (node, error) {
 	isLeaf := db.state.rootIsLeaf
 	rIndex := db.state.rootIndex
 
-	fmt.Println("GetRootNode")
+	fmt.Println("Meta")
 	fmt.Printf("rPos: %v\n", rPos)
 	fmt.Printf("isLeaf: %v\n", isLeaf)
 	fmt.Printf("rIndex: %v\n", rIndex)
@@ -100,11 +100,17 @@ func (db *FileStore) GetRootNode() (node, error) {
 		key := nv.key
 		value := db.GetValue(nv.vIndex, nv.vSize, nv.vPos)
 		nv.data = leafHashValue(db.hashFn, key, value)
-		return nv, nil
-	}
-	fmt.Printf("GetRootNode is %v\n", n)
+		nv.pos = rPos
+		nv.index = rIndex
+		return nv.toHashNode(db.hashFn), nil
+	} else {
+		nn := n.(*internalNode)
+		nn.pos = rPos
+		nn.index = rIndex
+		fmt.Printf("GetRootNode is %v\n", n.toHashNode(db.hashFn))
 
-	return n.toHashNode(db.hashFn), nil
+		return n.toHashNode(db.hashFn), nil
+	}
 }
 
 // Temp for testing...
@@ -154,50 +160,50 @@ func (db *FileStore) writeMeta(i uint16, p uint32, isleaf bool) {
 
 	padSize := MetaSize - (db.pos % MetaSize)
 	padding := pad(padSize)
-	db.buf.Write(padding)
+	n, _ := db.buf.Write(padding)
+	db.pos += uint32(n)
 
-	db.pos += uint32(padSize)
 	db.state.metaPos = db.pos
-
 	encodedMeta := db.state.Encode(db.hashFn)
-	db.buf.Write(encodedMeta)
+	n1, _ := db.buf.Write(encodedMeta)
 
-	db.pos += uint32(MetaSize)
+	db.pos += uint32(n1)
 }
 
 // Commit - write to file
-func (db *FileStore) Commit(i uint16, p uint32, isleaf bool) error {
+func (db *FileStore) Commit(root node) node {
 	if db.file == nil {
 		fmt.Println("Store commit - file is closed")
 		// TODO: This is where we should check file size in the future...
 		f, _, err := db.getFileHandle()
 		if err != nil {
-			return err
+			return nil
 		}
 		db.file = f
 	}
 
-	// Add lock
-
-	// 1. Write meta
-	db.writeMeta(i, p, isleaf)
-
-	// 2. dump to file
-	//db.Lock()
-	//defer db.Unlock()
-
-	if _, err := db.buf.WriteTo(db.file); err != nil {
-		return err
+	switch nn := root.(type) {
+	case *hashNode:
+		fmt.Println("Writing meta for:")
+		fmt.Printf("%v\n", nn)
+		db.writeMeta(nn.index, nn.pos, nn.isLeaf())
+		break
+	default:
+		panic("Trying to commit the wrong node")
 	}
 
-	//db.pos += uint32(n)
+	_, err := db.buf.WriteTo(db.file)
+	if err != nil {
+		panic("Commit failed")
+	}
 
 	if err := db.file.Sync(); err != nil {
-		return err
+		fmt.Println("Error on sync")
+		return nil
 	}
 	db.buf.Reset()
 
-	return nil
+	return root
 }
 
 // GetValue - file read from the store

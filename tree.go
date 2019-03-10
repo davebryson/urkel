@@ -17,7 +17,7 @@ func HasBit(key []byte, depth uint) bool {
 type MutableTree interface {
 	Set(key, value []byte)
 	Remove(key []byte)
-	Commit()
+	Commit() []byte
 }
 
 type Transaction struct {
@@ -42,14 +42,8 @@ func (tx *Transaction) Remove(key []byte) {
 	tx.Root, _ = tx.Tree.remove(tx.Root, key)
 }
 
-func (tx *Transaction) Commit() {
-	newRoot := tx.Tree.Commit(tx.Root)
-	if newRoot == nil {
-		panic("Got nil root on commit")
-	}
-
-	fmt.Printf("new root: %v\n", newRoot)
-	tx.Tree.Root = newRoot
+func (tx *Transaction) Commit() []byte {
+	return tx.Tree.commit(tx.Root)
 }
 
 var _ MutableTree = (*Transaction)(nil)
@@ -111,9 +105,6 @@ func UrkelTree(dir string, h Hasher) *Tree {
 			store:  store,
 		}
 	}
-
-	//fmt.Printf("Loaded rootnode: %v\n", rootNode)
-
 	return &Tree{
 		Root:   rootNode,
 		hashFn: h,
@@ -123,17 +114,25 @@ func UrkelTree(dir string, h Hasher) *Tree {
 
 func (t *Tree) Transaction() *Transaction {
 	tx := &Transaction{}
-	tx.Root = t.Root
-	tx.RootHash = t.RootHash()
+	lastRoot, err := t.store.GetRootNode()
+	if err != nil {
+		tx.Root = t.Root
+		tx.Tree = t
+		return tx
+	}
+	tx.Root = lastRoot
 	tx.Tree = t
-	//fmt.Printf("Loading new Tx with Root: %v\n", tx.Root)
 	return tx
 }
 
 func (t *Tree) Snapshot() ImmutableTree {
+	lastRoot, err := t.store.GetRootNode()
+	if err != nil {
+		fmt.Printf("Snap err: %v\n", err)
+		panic("Error decoding last root")
+	}
 	s := &Snapshot{}
-	s.Root = t.Root
-	s.RootHash = t.RootHash()
+	s.Root = lastRoot
 	s.Tree = t
 	return s
 }
@@ -159,13 +158,12 @@ loop:
 			break loop
 		case *hashNode:
 			n, err := t.store.GetNode(nn.index, nn.pos, nn.isLeaf())
-			n.setData(nn.data)
-
 			if err != nil {
-				fmt.Printf("hashNode: error reading hashNode: %v\n", err)
+				fmt.Printf("hashNode: error reading hashNode @: %v\n", nn.pos)
 				return nil
 			}
-
+			n.setData(nn.data)
+			fmt.Printf("Read hashnode @ %v\n", nn.pos)
 			root = n
 		case *leafNode:
 			if bytes.Compare(key, nn.key) == 0 {
@@ -238,7 +236,10 @@ func (t *Tree) get(root node, key []byte) []byte {
 		case *nullNode:
 			return nil
 		case *hashNode:
-			n, _ := t.store.GetNode(nn.index, nn.pos, nn.isLeaf())
+			n, err := t.store.GetNode(nn.index, nn.pos, nn.isLeaf())
+			if err != nil {
+				return nil
+			}
 			n.setData(nn.data)
 			root = n
 		case *internalNode:
@@ -357,21 +358,27 @@ loop:
 	return root, nil
 }
 
-// Commit nodes to storage
-func (t *Tree) Commit(r node) node {
+func (t *Tree) commit(r node) []byte {
+	fmt.Println("Start commit")
 	newRoot := t.writeNode(r)
 	if newRoot == nil {
 		panic("Got nil root on commit")
 	}
-	t.Root = newRoot
 
-	err := t.store.Commit(newRoot.getIndex(), newRoot.getPos(), newRoot.isLeaf())
-	if err != nil {
-		panic(err)
-	}
-	//return r
-	return newRoot
+	t.Root = t.store.Commit(newRoot)
+	fmt.Println("COMMIT")
+	return t.RootHash()
 }
+
+// Commit nodes to storage
+/*func (t *Tree) Commit(r node) node {
+	newRoot := t.writeNode(r)
+	if newRoot == nil {
+		panic("Got nil root on commit")
+	}
+	t.Root = t.store.Commit(newRoot)
+	return newRoot
+}*/
 
 func (t *Tree) writeNode(root node) node {
 	switch nn := root.(type) {
@@ -391,12 +398,14 @@ func (t *Tree) writeNode(root node) node {
 			}
 			nn.index = i
 			nn.pos = pos
-			//fmt.Printf("wrote internal: %v\n", nn)
+
+			fmt.Println("Writing internal for:")
+			fmt.Printf("%v\n\n", nn)
 		}
 
 		return nn.toHashNode(t.hashFn)
 	case *leafNode:
-		if nn.index == 0 {
+		if nn.index == 0 && len(nn.value) > 0 {
 			// Write the value
 			i, vpos, err := t.store.WriteValue(nn.value)
 			if err != nil {

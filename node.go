@@ -3,6 +3,7 @@ package urkel
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 )
 
 // node is the generic interface for all tree nodes.  There are 4 possible concrete nodes:
@@ -209,6 +210,9 @@ func (n *internalNode) Encode(h Hasher) []byte {
 
 // DecodeNode - either a leaf or internal node
 func DecodeNode(data []byte, isleaf bool) (node, error) {
+
+	fmt.Printf("Decode %v bits\n", len(data))
+
 	buf := bytes.NewReader(data)
 	if isleaf {
 		var index uint16

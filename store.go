@@ -25,5 +25,5 @@ type Store interface {
 	WriteValue(val []byte) (uint16, uint32, error)
 
 	// Commit the root node. Writes out nodes and meta
-	Commit(i uint16, p uint32, isleaf bool) error
+	Commit(n node) node
 }

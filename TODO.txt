@@ -1,4 +1,4 @@
 
 March 8 notes:
-- Actual store commit code is commented out in Tree.Commit
 - Everything works until you commit to store
+- Go back through the file store - the problem is after commit index/pos
